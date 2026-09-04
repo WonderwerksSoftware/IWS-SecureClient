@@ -1,0 +1,41 @@
+.worktrees/
+
+# Platform build products and caches
+.gradle/
+.cleanroom/
+**/build/
+**/bin/
+**/obj/
+**/.out/
+dist/
+
+# Downloaded or generated client binaries
+*.aar
+*.apk
+*.cab
+*.exe
+*.nupkg
+
+# Credentials, device identity, and transient enrollment material
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.setup-key
+one-use.key
+netbird.pat
+signer.properties
+device-build.properties
+
+# Runtime state, profiles, evidence, and logs
+*.log
+*.jsonl
+WebView2Fixed/
+profiles/
+state/
+
+# Editor and operating-system metadata
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
