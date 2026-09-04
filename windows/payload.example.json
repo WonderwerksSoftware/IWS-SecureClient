@@ -1,0 +1,6 @@
+{
+  "device_name": "DEVMACHINE-IWS",
+  "management_server": "https://api.netbird.io:443",
+  "setup_key_file": "C:\\ProgramData\\IWS\\Provisioning\\one-use.key",
+  "iws_entrypoint": "http://100.83.246.85:443/"
+}

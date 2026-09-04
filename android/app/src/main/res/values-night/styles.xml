@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:colorAccent">@color/iws_accent</item>
+        <item name="android:colorBackground">@color/iws_background</item>
+        <item name="android:windowBackground">@color/iws_background</item>
+        <item name="android:textColorPrimary">@color/iws_text</item>
+        <item name="android:textColorSecondary">@color/iws_text_muted</item>
+        <item name="android:statusBarColor">@color/iws_surface</item>
+        <item name="android:navigationBarColor">@color/iws_background</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

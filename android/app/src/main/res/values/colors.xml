@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Impact Wiring Solutions brand values, taken from the official IWS site and
+     the official logo. Dark neutrals are derived from the site slate #2C3E50. -->
+<resources>
+    <color name="iws_deep">#1D3686</color>
+    <color name="iws_sky">#6FADE0</color>
+    <color name="iws_gradient_mid">#5870B0</color>
+    <color name="iws_paper">#EEF1EA</color>
+
+    <color name="iws_background">#EEF1EA</color>
+    <color name="iws_surface">#FFFFFF</color>
+    <color name="iws_surface_alt">#F5F5F5</color>
+    <color name="iws_border">#DFDFDF</color>
+    <color name="iws_text">#111418</color>
+    <color name="iws_text_muted">#5A6470</color>
+    <color name="iws_accent">#1D3686</color>
+    <color name="iws_danger">#8B0000</color>
+    <color name="iws_launcher_background">#14181D</color>
+</resources>

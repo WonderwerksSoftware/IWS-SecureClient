@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="iws_background">#161A1F</color>
+    <color name="iws_surface">#1E242B</color>
+    <color name="iws_surface_alt">#232A32</color>
+    <color name="iws_border">#2F3841</color>
+    <color name="iws_text">#EEF1EA</color>
+    <color name="iws_text_muted">#9AA6B2</color>
+    <color name="iws_accent">#78B8E0</color>
+    <color name="iws_danger">#E4736F</color>
+</resources>
