@@ -1,0 +1,97 @@
+plugins {
+    id 'com.android.application'
+}
+
+def buildConfigString = { String value ->
+    '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
+}
+def expectedOverlay = providers.gradleProperty('iwsExpectedOverlayCidr').orElse('').get()
+def prohibitedCidrs = providers.gradleProperty('iwsProhibitedCidrs').orElse(
+        '100.65.0.0/16,100.70.0.0/16,100.74.0.0/16,100.96.0.0/16,' +
+        '100.98.0.0/16,100.99.0.0/16,100.111.0.0/16,100.116.0.0/16,' +
+        '100.117.0.0/16,100.127.0.0/16,10.0.0.0/8,172.16.0.0/12,' +
+        '192.168.0.0/16').get()
+def allowedEndpointIpv4 = providers.gradleProperty('iwsAllowedEndpointIpv4').orElse('').get()
+def allowedEndpointPort = providers.gradleProperty('iwsAllowedEndpointPort').orElse('0').get().toInteger()
+def testEndpointUrl = allowedEndpointIpv4.isEmpty()
+        ? ''
+        : "http://${allowedEndpointIpv4}:${allowedEndpointPort}/"
+def managementUrl = providers.gradleProperty('iwsManagementUrl')
+        .orElse('https://api.netbird.io:443').get()
+def portalUrl = providers.gradleProperty('iwsPortalUrl').orElse('').get()
+def deviceBuildProperties = new Properties()
+def deviceBuildPropertiesPath = System.getenv('IWS_DEVICE_BUILD_PROPERTIES') ?: ''
+if (!deviceBuildPropertiesPath.isEmpty()) {
+    def deviceBuildFile = file(deviceBuildPropertiesPath)
+    if (!deviceBuildFile.isFile()) throw new GradleException('IWS device build properties file is missing')
+    deviceBuildFile.withInputStream { deviceBuildProperties.load(it) }
+}
+def bootstrapSetupKey = deviceBuildProperties.getProperty('iwsBootstrapSetupKey', '')
+def bootstrapHostname = deviceBuildProperties.getProperty('iwsBootstrapHostname', '')
+def signerPropertiesPath = deviceBuildProperties.getProperty('iwsSignerPropertiesFile', '')
+def signerProperties = new Properties()
+if (!signerPropertiesPath.isEmpty()) {
+    def signerFile = file(signerPropertiesPath)
+    if (!signerFile.isFile()) throw new GradleException('IWS signer properties file is missing')
+    signerFile.withInputStream { signerProperties.load(it) }
+    ['storeFile', 'storePassword', 'keyAlias', 'keyPassword'].each { key ->
+        if (!signerProperties.getProperty(key)) throw new GradleException('IWS signer properties are incomplete')
+    }
+}
+
+android {
+    namespace 'com.impactwiring.iwsconnectpoc'
+    compileSdk 36
+
+    signingConfigs {
+        if (!signerPropertiesPath.isEmpty()) {
+            iwsDevice {
+                storeFile file(signerProperties.getProperty('storeFile'))
+                storePassword signerProperties.getProperty('storePassword')
+                keyAlias signerProperties.getProperty('keyAlias')
+                keyPassword signerProperties.getProperty('keyPassword')
+            }
+        }
+    }
+
+    defaultConfig {
+        applicationId 'com.impactwiring.iwsconnectpoc'
+        minSdk 26
+        targetSdk 36
+        versionCode 1
+        versionName '0.1-poc'
+        buildConfigField 'String', 'EXPECTED_OVERLAY_CIDR', buildConfigString(expectedOverlay)
+        buildConfigField 'String', 'PROHIBITED_CIDRS', buildConfigString(prohibitedCidrs)
+        buildConfigField 'String', 'TEST_ENDPOINT_URL', buildConfigString(testEndpointUrl)
+        buildConfigField 'String', 'ALLOWED_ENDPOINT_IPV4', buildConfigString(allowedEndpointIpv4)
+        buildConfigField 'int', 'ALLOWED_ENDPOINT_PORT', allowedEndpointPort.toString()
+        buildConfigField 'String', 'MANAGEMENT_URL', buildConfigString(managementUrl)
+        buildConfigField 'String', 'IWS_PORTAL_URL', buildConfigString(portalUrl)
+        buildConfigField 'String', 'IWS_BOOTSTRAP_SETUP_KEY', buildConfigString(bootstrapSetupKey)
+        buildConfigField 'String', 'IWS_BOOTSTRAP_HOSTNAME', buildConfigString(bootstrapHostname)
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    buildTypes {
+        debug {
+            if (!signerPropertiesPath.isEmpty()) signingConfig signingConfigs.iwsDevice
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_11
+        targetCompatibility JavaVersion.VERSION_11
+    }
+
+    testOptions {
+        unitTests.returnDefaultValues = true
+    }
+}
+
+dependencies {
+    implementation files('libs/netbird-v0.77.1.aar')
+    testImplementation 'junit:junit:4.13.2'
+}

@@ -1,0 +1,12 @@
+{
+  "name": "@wonderwerks/iws-secure-client",
+  "version": "0.1.0-poc.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test packaging/tests/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">IWS</string>
+    <string name="iws_company">Impact Wiring Solutions</string>
+    <string name="iws_back">Back</string>
+    <string name="iws_portal">IWS Portal</string>
+    <string name="iws_retry">Retry</string>
+    <string name="iws_mark_description">IWS</string>
+</resources>
