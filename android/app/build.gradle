@@ -13,9 +13,8 @@ def prohibitedCidrs = providers.gradleProperty('iwsProhibitedCidrs').orElse(
         '192.168.0.0/16').get()
 def allowedEndpointIpv4 = providers.gradleProperty('iwsAllowedEndpointIpv4').orElse('').get()
 def allowedEndpointPort = providers.gradleProperty('iwsAllowedEndpointPort').orElse('0').get().toInteger()
-def testEndpointUrl = allowedEndpointIpv4.isEmpty()
-        ? ''
-        : "http://${allowedEndpointIpv4}:${allowedEndpointPort}/"
+// Production readiness is the HTTPS portal navigation; no legacy HTTP probe.
+def testEndpointUrl = ''
 def managementUrl = providers.gradleProperty('iwsManagementUrl')
         .orElse('https://api.netbird.io:443').get()
 def portalUrl = providers.gradleProperty('iwsPortalUrl').orElse('').get()

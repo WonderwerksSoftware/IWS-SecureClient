@@ -2,10 +2,10 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $script:BoundaryGroup = "IWS Client Boundary POC"
-$script:ApprovedAddress = "100.83.246.85"
+$script:ApprovedAddress = "100.83.75.124"
 $script:ApprovedPort = 443
-$script:LowerRange = "0.0.0.0-100.83.246.84"
-$script:UpperRange = "100.83.246.86-255.255.255.255"
+$script:LowerRange = "0.0.0.0-100.83.75.123"
+$script:UpperRange = "100.83.75.125-255.255.255.255"
 $script:IPv6Range = "0:0:0:0:0:0:0:0-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
 
 function New-IwsBoundarySpec {

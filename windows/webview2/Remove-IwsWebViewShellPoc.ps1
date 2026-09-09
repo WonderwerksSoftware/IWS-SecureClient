@@ -16,6 +16,7 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
     throw "IWS shell removal requires Administrator approval."
 }
 $clientRoot = "C:\Program Files\IWS\Client"
+& (Join-Path $clientRoot "Install-IwsProductionTrust.ps1") -Remove
 Get-Process -Name "IwsClient", "IwsBoundaryProbe" -ErrorAction SilentlyContinue | Stop-Process -Force
 $removeBoundary = Join-Path $clientRoot "Remove-IwsWebViewBoundary.ps1"
 $boundaryRules = @(Get-NetFirewallRule -Group "IWS Client Boundary POC" -ErrorAction SilentlyContinue)
@@ -26,6 +27,8 @@ $shortcut = Join-Path ([Environment]::GetFolderPath("CommonPrograms")) "IWS.lnk"
 Remove-Item -LiteralPath $shortcut -Force -ErrorAction SilentlyContinue
 foreach ($path in @(
     (Join-Path $clientRoot "IwsClient.exe"),
+    (Join-Path $clientRoot "Install-IwsProductionTrust.ps1"),
+    (Join-Path $clientRoot "iws-production-root-ca.crt"),
     (Join-Path $clientRoot "IwsBoundaryProbe.exe"),
     (Join-Path $clientRoot "Microsoft.Web.WebView2.Core.dll"),
     (Join-Path $clientRoot "Microsoft.Web.WebView2.WinForms.dll"),

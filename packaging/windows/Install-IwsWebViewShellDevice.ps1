@@ -55,10 +55,12 @@ if (Test-Path -LiteralPath $installedRuntime) { Remove-Item $installedRuntime -R
 foreach ($file in @(
     "IwsClient.exe", "IwsBoundaryProbe.exe", "Microsoft.Web.WebView2.Core.dll",
     "Microsoft.Web.WebView2.WinForms.dll", "WebView2Loader.dll",
-    "IwsWebViewFirewall.psm1", "Set-IwsWebViewBoundary.ps1", "Remove-IwsWebViewBoundary.ps1"
+    "IwsWebViewFirewall.psm1", "Set-IwsWebViewBoundary.ps1", "Remove-IwsWebViewBoundary.ps1",
+    "Install-IwsProductionTrust.ps1", "iws-production-root-ca.crt", "Remove-IwsWebViewShellPoc.ps1"
 )) {
     Copy-Item -LiteralPath (Join-Path $bundle $file) -Destination $clientRoot -Force
 }
+& (Join-Path $clientRoot "Install-IwsProductionTrust.ps1") -CertificatePath (Join-Path $clientRoot "iws-production-root-ca.crt")
 $runtimeSource = Get-ChildItem -LiteralPath (Join-Path $bundle "WebView2Fixed") `
     -Directory -Filter "Microsoft.WebView2.FixedVersionRuntime.*" |
     Select-Object -First 1

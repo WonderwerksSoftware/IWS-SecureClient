@@ -74,7 +74,7 @@ export async function packageWindowsDevice({request, templatePath, payloadRoot =
       device_name: request.clientHostname,
       management_server: "https://api.netbird.io:443",
       setup_key_file: "__IWS_SETUP_KEY_PATH__",
-      iws_entrypoint: "http://100.83.246.85:443/"
+      iws_entrypoint: "https://portal.iws.internal/"
     }), {mode: 0o600});
 
     const shellExcluded = new Set([
