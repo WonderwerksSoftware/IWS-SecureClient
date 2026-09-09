@@ -10,7 +10,7 @@ public final class PortalLoadRecoveryTest {
     public void successfulAllowedLoadMayRevealPortal() {
         PortalLoadRecovery recovery = new PortalLoadRecovery();
 
-        recovery.onMainFrameLoadStarted();
+        recovery.onMainFrameLoadRequested();
 
         assertTrue(recovery.mayRevealPortal(true));
     }
@@ -19,21 +19,35 @@ public final class PortalLoadRecoveryTest {
     public void failedLoadCannotHideTheErrorPanelWhenFinished() {
         PortalLoadRecovery recovery = new PortalLoadRecovery();
 
-        recovery.onMainFrameLoadStarted();
+        recovery.onMainFrameLoadRequested();
         recovery.onMainFrameLoadFailed();
 
         assertFalse(recovery.mayRevealPortal(true));
     }
 
     @Test
+    public void failedLoadKeepsErrorPanelVisibleWhenTransportReportsConnected() {
+        PortalLoadRecovery recovery = new PortalLoadRecovery();
+
+        recovery.onMainFrameLoadRequested();
+        recovery.onMainFrameLoadFailed();
+
+        assertTrue(recovery.shouldKeepErrorPanelVisible());
+
+        recovery.onMainFrameLoadRequested();
+
+        assertFalse(recovery.shouldKeepErrorPanelVisible());
+    }
+
+    @Test
     public void newSuccessfulRetryMayRevealPortalAfterPreviousLoadFailed() {
         PortalLoadRecovery recovery = new PortalLoadRecovery();
 
-        recovery.onMainFrameLoadStarted();
+        recovery.onMainFrameLoadRequested();
         recovery.onMainFrameLoadFailed();
         assertFalse(recovery.mayRevealPortal(true));
 
-        recovery.onMainFrameLoadStarted();
+        recovery.onMainFrameLoadRequested();
 
         assertTrue(recovery.mayRevealPortal(true));
     }
@@ -42,8 +56,24 @@ public final class PortalLoadRecoveryTest {
     public void completedDisallowedLoadCannotRevealPortal() {
         PortalLoadRecovery recovery = new PortalLoadRecovery();
 
-        recovery.onMainFrameLoadStarted();
+        recovery.onMainFrameLoadRequested();
 
         assertFalse(recovery.mayRevealPortal(false));
+    }
+
+    @Test
+    public void errorPageStartCannotClearHttpFailureBeforeItsFinish() {
+        PortalLoadRecovery recovery = new PortalLoadRecovery();
+
+        recovery.onMainFrameLoadRequested();
+        recovery.onMainFrameLoadFailed();
+        recovery.onMainFrameLoadStarted();
+
+        assertFalse(recovery.mayRevealPortal(true));
+
+        recovery.onMainFrameLoadRequested();
+        recovery.onMainFrameLoadStarted();
+
+        assertTrue(recovery.mayRevealPortal(true));
     }
 }

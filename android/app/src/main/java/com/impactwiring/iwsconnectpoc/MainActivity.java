@@ -287,6 +287,8 @@ public final class MainActivity extends Activity implements IwsVpnService.Observ
                 boolean blocked = !isAllowed(request.getUrl().toString());
                 if (blocked) {
                     showConnectionState("That destination is outside IWS.", true);
+                } else {
+                    portalLoadRecovery.onMainFrameLoadRequested();
                 }
                 return blocked;
             }
@@ -424,11 +426,13 @@ public final class MainActivity extends Activity implements IwsVpnService.Observ
             return;
         }
         portalNeedsReload = true;
+        portalLoadRecovery.onMainFrameLoadRequested();
         webView.loadUrl(portalPolicy.portalRoot());
     }
 
     private void navigateBack() {
         if (webView.canGoBack()) {
+            portalLoadRecovery.onMainFrameLoadRequested();
             webView.goBack();
         }
         updateBackButton();
@@ -467,9 +471,12 @@ public final class MainActivity extends Activity implements IwsVpnService.Observ
                         uiState.employeeMessage, uiState.employeeDetail, uiState.showRetry);
                 return;
             }
-            statusPane.setVisibility(View.GONE);
+            if (!portalLoadRecovery.shouldKeepErrorPanelVisible()) {
+                statusPane.setVisibility(View.GONE);
+            }
             String currentUrl = webView.getUrl();
             if (portalNeedsReload || currentUrl == null || !isAllowed(currentUrl)) {
+                portalLoadRecovery.onMainFrameLoadRequested();
                 webView.loadUrl(portalPolicy.portalRoot());
             }
         });
