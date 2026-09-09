@@ -19,7 +19,10 @@ bad_names=$(find . -path './.git' -prune -o -path './.cleanroom' -prune -o \
     exit 1
 }
 
-tracked=$(git ls-files 2>/dev/null || find . -type f -not -path './.git/*')
+tracked=$(git ls-files 2>/dev/null || find . \
+    -path './.git' -prune -o -path './.cleanroom' -prune -o -path './dist' -prune -o \
+    -path './android/.gradle' -prune -o -path './android/build' -prune -o \
+    -path './android/app/build' -prune -o -path './android/app/libs' -prune -o -type f -print)
 tracked=$(printf '%s\n' "$tracked" | rg -v '^scripts/secret-scan\.sh$' || true)
 [ -n "$tracked" ] || exit 0
 if printf '%s\n' "$tracked" | xargs rg -n --no-heading \

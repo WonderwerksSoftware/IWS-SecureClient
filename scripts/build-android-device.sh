@@ -24,7 +24,8 @@ generation=$(jq -er '.generation | select(type == "number" and . >= 1 and floor 
 hostname=$(jq -er '.clientHostname | select(type == "string" and length > 0)' "$IWS_DEVICE_MANIFEST_FILE")
 setup_key=$(tr -d '\r\n' < "$IWS_SETUP_KEY_FILE")
 [ -n "$setup_key" ] || { echo "IWS setup material is empty" >&2; exit 1; }
-private_home=$(mktemp -d "${IWS_OUTPUT_DIR%/}/.gradle-XXXXXX")
+mkdir -p "$repo_root/android/.gradle"
+private_home=$(mktemp -d "$repo_root/android/.gradle/iws-private-XXXXXX")
 source_apk=
 cleanup() {
     setup_key=
@@ -40,7 +41,7 @@ properties="$private_home/gradle.properties"
     printf 'iwsSignerPropertiesFile=%s\n' "$IWS_SIGNER_PROPERTIES"
 } > "$properties"
 chmod 600 "$properties"
-IWS_EVIDENCE_ROOT="$private_home/evidence" IWS_DEVICE_BUILD_PROPERTIES="$properties" \
+GRADLE_USER_HOME="$private_home/gradle-home" IWS_EVIDENCE_ROOT="$private_home/evidence" IWS_DEVICE_BUILD_PROPERTIES="$properties" \
     "$repo_root/scripts/build-android-poc.sh" >/dev/null
 source_apk="$repo_root/dist/iws-connect-poc-cleanroom.apk"
 [ -f "$source_apk" ] || { echo "IWS Android build did not produce an APK" >&2; exit 1; }
@@ -56,6 +57,9 @@ if unzip -p "$output" | strings | grep -Fq 'NETBIRD_PAT'; then
     exit 1
 fi
 apksigner="${IWS_CLEANROOM_ROOT:-$repo_root/.cleanroom}/android-sdk/build-tools/$ANDROID_BUILD_TOOLS/apksigner"
+export JAVA_HOME="${IWS_CLEANROOM_ROOT:-$repo_root/.cleanroom}/tools/jdk21"
+export PATH="$JAVA_HOME/bin:$PATH"
+[ -x "$JAVA_HOME/bin/java" ] || { echo "IWS pinned Java is unavailable" >&2; exit 1; }
 [ -x "$apksigner" ] || { echo "IWS APK verifier is unavailable" >&2; rm -f "$output"; exit 1; }
 actual_signer=$("$apksigner" verify --print-certs "$output" |
     sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | tr 'A-F' 'a-f')
