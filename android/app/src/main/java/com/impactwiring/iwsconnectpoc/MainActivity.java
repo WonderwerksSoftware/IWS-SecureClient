@@ -47,6 +47,7 @@ public final class MainActivity extends Activity implements IwsVpnService.Observ
     private boolean permissionRequestInFlight;
     private boolean bootstrapEnrollmentInFlight;
     private boolean portalNeedsReload = true;
+    private final PortalLoadRecovery portalLoadRecovery = new PortalLoadRecovery();
 
     private final ServiceConnection connection = new ServiceConnection() {
         @Override
@@ -303,12 +304,16 @@ public final class MainActivity extends Activity implements IwsVpnService.Observ
 
             @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
+                portalLoadRecovery.onMainFrameLoadStarted();
                 updateBackButton();
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
-                portalNeedsReload = false;
+                if (portalLoadRecovery.mayRevealPortal(isAllowed(url))) {
+                    portalNeedsReload = false;
+                    statusPane.setVisibility(View.GONE);
+                }
                 updateBackButton();
             }
 
@@ -316,6 +321,7 @@ public final class MainActivity extends Activity implements IwsVpnService.Observ
             public void onReceivedError(
                     WebView view, WebResourceRequest request, WebResourceError error) {
                 if (request.isForMainFrame()) {
+                    portalLoadRecovery.onMainFrameLoadFailed();
                     portalNeedsReload = true;
                     showConnectionState("IWS could not load the portal.", true);
                 }
@@ -327,6 +333,7 @@ public final class MainActivity extends Activity implements IwsVpnService.Observ
                     WebResourceRequest request,
                     WebResourceResponse response) {
                 if (request.isForMainFrame() && response.getStatusCode() >= 400) {
+                    portalLoadRecovery.onMainFrameLoadFailed();
                     portalNeedsReload = true;
                     showConnectionState("IWS portal returned an error.", true);
                 }
@@ -336,6 +343,7 @@ public final class MainActivity extends Activity implements IwsVpnService.Observ
             public void onReceivedSslError(
                     WebView view, SslErrorHandler handler, SslError error) {
                 handler.cancel();
+                portalLoadRecovery.onMainFrameLoadFailed();
                 portalNeedsReload = true;
                 showConnectionState("IWS could not verify the portal connection.", true);
             }
