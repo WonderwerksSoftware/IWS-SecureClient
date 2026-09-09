@@ -41,6 +41,10 @@ properties="$private_home/gradle.properties"
     printf 'iwsSignerPropertiesFile=%s\n' "$IWS_SIGNER_PROPERTIES"
 } > "$properties"
 chmod 600 "$properties"
+pattern_file="$private_home/bootstrap.pattern"
+printf '%s\n' "$setup_key" > "$pattern_file"
+chmod 600 "$pattern_file"
+setup_key=
 GRADLE_USER_HOME="$private_home/gradle-home" IWS_EVIDENCE_ROOT="$private_home/evidence" IWS_DEVICE_BUILD_PROPERTIES="$properties" IWS_ANDROID_VARIANT=release \
     "$repo_root/scripts/build-android-poc.sh" >/dev/null
 source_apk="$repo_root/dist/iws-connect-production-rc1.apk"
@@ -49,7 +53,7 @@ safe_id=$(printf '%s' "$device_id" | tr -c 'A-Za-z0-9_-' '-')
 output="$IWS_OUTPUT_DIR/IWS-${safe_id}-g${generation}.apk"
 cp "$source_apk" "$output"
 chmod 600 "$output"
-count=$(unzip -p "$output" 'classes*.dex' | strings | grep -Fo "$setup_key" | wc -l)
+count=$(unzip -p "$output" 'classes*.dex' | strings | grep -Fo -f "$pattern_file" | wc -l)
 [ "$count" -eq 1 ] || { echo "IWS Android bootstrap occurrence check failed" >&2; rm -f "$output"; exit 1; }
 if unzip -p "$output" | strings | grep -Fq 'NETBIRD_PAT'; then
     echo "IWS Android artifact contains prohibited admin material" >&2
