@@ -2,6 +2,24 @@
 set -eu
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 . "$repo_root/third_party/netbird/pins.sh"
+variant=${IWS_ANDROID_VARIANT:-debug}
+case "$variant" in
+    debug)
+        gradle_assemble=assembleDebug
+        apk=$repo_root/android/app/build/outputs/apk/debug/app-debug.apk
+        output=$repo_root/dist/iws-connect-poc-cleanroom.apk
+        ;;
+    release)
+        : "${IWS_DEVICE_BUILD_PROPERTIES:?IWS release builds require explicit device and signer properties}"
+        gradle_assemble=assembleRelease
+        apk=$repo_root/android/app/build/outputs/apk/release/app-release.apk
+        output=$repo_root/dist/iws-connect-production-rc1.apk
+        ;;
+    *)
+        echo "unsupported IWS Android build variant: $variant" >&2
+        exit 1
+        ;;
+esac
 clean_root=${IWS_CLEANROOM_ROOT:-$repo_root/.cleanroom}
 downloads=$clean_root/downloads
 tools_root=$clean_root/tools
@@ -51,9 +69,8 @@ while IFS='=' read -r key value; do
     set -- "$@" "-P$key=$value"
 done < "$repo_root/config/checkpoint/android-poc.properties"
 
-(cd "$repo_root/android" && ./gradlew --no-daemon clean test lint assembleDebug "$@")
-apk=$repo_root/android/app/build/outputs/apk/debug/app-debug.apk
-cp "$apk" "$repo_root/dist/iws-connect-poc-cleanroom.apk"
-sha256sum "$aar" "$repo_root/dist/iws-connect-poc-cleanroom.apk" \
+(cd "$repo_root/android" && ./gradlew --no-daemon clean test lint "$gradle_assemble" "$@")
+cp "$apk" "$output"
+sha256sum "$aar" "$output" \
     > "$repo_root/dist/SHA256SUMS"
-printf '%s\n' "$repo_root/dist/iws-connect-poc-cleanroom.apk"
+printf '%s\n' "$output"

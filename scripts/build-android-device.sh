@@ -41,9 +41,9 @@ properties="$private_home/gradle.properties"
     printf 'iwsSignerPropertiesFile=%s\n' "$IWS_SIGNER_PROPERTIES"
 } > "$properties"
 chmod 600 "$properties"
-GRADLE_USER_HOME="$private_home/gradle-home" IWS_EVIDENCE_ROOT="$private_home/evidence" IWS_DEVICE_BUILD_PROPERTIES="$properties" \
+GRADLE_USER_HOME="$private_home/gradle-home" IWS_EVIDENCE_ROOT="$private_home/evidence" IWS_DEVICE_BUILD_PROPERTIES="$properties" IWS_ANDROID_VARIANT=release \
     "$repo_root/scripts/build-android-poc.sh" >/dev/null
-source_apk="$repo_root/dist/iws-connect-poc-cleanroom.apk"
+source_apk="$repo_root/dist/iws-connect-production-rc1.apk"
 [ -f "$source_apk" ] || { echo "IWS Android build did not produce an APK" >&2; exit 1; }
 safe_id=$(printf '%s' "$device_id" | tr -c 'A-Za-z0-9_-' '-')
 output="$IWS_OUTPUT_DIR/IWS-${safe_id}-g${generation}.apk"

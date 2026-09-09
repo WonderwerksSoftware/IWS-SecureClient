@@ -24,10 +24,11 @@ test("device script verifies with pinned Java and keeps Gradle state in its disp
     await writeFile(path.join(source, "scripts/build-android-poc.sh"), `#!/bin/sh
 set -eu
 case "$GRADLE_USER_HOME" in "$PWD"/android/.gradle/iws-private-*/gradle-home) : ;; *) exit 5 ;; esac
+test "$IWS_ANDROID_VARIANT" = release
 "$PWD/scripts/secret-scan.sh"
 mkdir -p dist
 cp "$IWS_SETUP_KEY_FILE" dist/classes.dex
-(cd dist && zip -q iws-connect-poc-cleanroom.apk classes.dex)
+(cd dist && zip -q iws-connect-production-rc1.apk classes.dex)
 `, {mode: 0o700});
     await writeFile(path.join(cache, "tools/jdk21/bin/java"), "#!/bin/sh\nexit 0\n", {mode: 0o700});
     await writeFile(path.join(cache, "android-sdk/build-tools/fixture/apksigner"), `#!/bin/sh
