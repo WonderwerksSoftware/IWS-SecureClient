@@ -25,8 +25,10 @@ tracked=$(git ls-files 2>/dev/null || find . \
     -path './android/app/build' -prune -o -path './android/app/libs' -prune -o -type f -print)
 tracked=$(printf '%s\n' "$tracked" | rg -v '^scripts/secret-scan\.sh$' || true)
 [ -n "$tracked" ] || exit 0
-if printf '%s\n' "$tracked" | xargs rg -n --no-heading \
-    '(-----BEGIN (OPENSSH|RSA|EC|PRIVATE) PRIVATE KEY-----|netbird\.json|NETBIRD_PAT\s*[:=])' ; then
+# Permit only this fixed harmless test value with its exact annotation; the
+# annotation does not exempt other values, other matches, or an entire line/file.
+if printf '%s\n' "$tracked" | xargs rg -n -P --no-heading \
+    '(-----BEGIN (OPENSSH|RSA|EC|PRIVATE) PRIVATE KEY-----|netbird\.json|NETBIRD_PAT\s*[:=](?! "synthetic-admin", // iws-synthetic-fixture$))' ; then
     echo "possible credential or peer state found" >&2
     exit 1
 fi

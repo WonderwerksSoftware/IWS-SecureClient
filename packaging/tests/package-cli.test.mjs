@@ -173,7 +173,8 @@ ${fail ? "exit 1" : 'printf artifact > "$IWS_OUTPUT_DIR/result.apk"'}
       checkpointPath, clientCheckpoint: "immutable-fixture", outputDirectory});
     const result = spawnSync(process.execPath, [cli], {encoding: "utf8", env: {...process.env,
       IWS_PACKAGE_REQUEST_FILE: requestFile, IWS_ANDROID_TOOLCHAIN_ROOT: "/shared/toolchain",
-      NETBIRD_PAT: "synthetic-admin", DATABASE_URL: "synthetic-db", JAVA_HOME: "/wrong/java", IWS_UNRELATED: "unused"}});
+      NETBIRD_PAT: "synthetic-admin", // iws-synthetic-fixture
+      DATABASE_URL: "synthetic-db", JAVA_HOME: "/wrong/java", IWS_UNRELATED: "unused"}});
     assert.equal(result.status, outcome === "success" ? 0 : 1, result.stderr);
     assert.doesNotMatch(result.stdout + result.stderr, /harmless-synthetic-bootstrap|synthetic-admin|synthetic-db/);
     const builtAt = (await readFile(path.join(outputDirectory, "built-at"), "utf8")).trim();
