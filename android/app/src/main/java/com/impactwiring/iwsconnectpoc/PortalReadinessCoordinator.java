@@ -2,6 +2,8 @@ package com.impactwiring.iwsconnectpoc;
 
 /** Coordinates one bounded portal-readiness episode independently of Android UI classes. */
 final class PortalReadinessCoordinator {
+    static final long NO_NAVIGATION = 0L;
+
     interface Clock {
         long nowMillis();
     }
@@ -13,9 +15,9 @@ final class PortalReadinessCoordinator {
 
         void revealPortal();
 
-        void navigateToPortalRoot();
+        void navigateToPortalRoot(long navigationIdentity);
 
-        boolean startProbe(long episode, long remainingMillis);
+        boolean startProbe(long probeIdentity, long remainingMillis);
 
         void scheduleRetry(long episode, long delayMillis);
 
@@ -36,10 +38,17 @@ final class PortalReadinessCoordinator {
     private boolean episodeActive;
     private boolean readinessConfirmed;
     private boolean activeAllowedPage;
+    private boolean rootNavigationPending;
     private boolean terminalFailure;
     private boolean terminalTlsFailure;
     private boolean probeInFlight;
-    private long probeEpisode;
+    private boolean probeResultEligible;
+    private boolean waitingForProbeSlot;
+    private long probeIdentitySequence;
+    private long activeProbeIdentity;
+    private long activeProbeEpisode;
+    private long navigationIdentitySequence;
+    private long expectedNavigationIdentity;
     private long episode;
     private long deadlineMillis;
     private int retryNumber;
@@ -56,6 +65,8 @@ final class PortalReadinessCoordinator {
     void onStop() {
         started = false;
         transportConnected = false;
+        invalidateProbeResult();
+        invalidateNavigation();
         cancelEpisode();
     }
 
@@ -65,10 +76,16 @@ final class PortalReadinessCoordinator {
         }
         if (transportConnected) {
             transportConnected = false;
-            cancelEpisode();
+            readinessConfirmed = false;
+            invalidateProbeResult();
+            invalidateNavigation();
         }
         if (terminalFailure) {
             driver.showUnavailable(terminalTlsFailure);
+            return;
+        }
+        if (!episodeActive) {
+            beginEpisode();
         } else {
             driver.showConnecting();
         }
@@ -78,9 +95,24 @@ final class PortalReadinessCoordinator {
         if (!started) {
             return;
         }
-        transportConnected = false;
-        cancelEpisode();
-        driver.showUnavailable(terminalFailure && terminalTlsFailure);
+        boolean connectionWasActive = transportConnected;
+        if (connectionWasActive) {
+            transportConnected = false;
+            readinessConfirmed = false;
+            invalidateProbeResult();
+            invalidateNavigation();
+        }
+        if (terminalFailure) {
+            driver.showUnavailable(terminalTlsFailure);
+            return;
+        }
+        if (episodeActive) {
+            driver.showConnecting();
+        } else if (connectionWasActive || activeAllowedPage) {
+            beginEpisode();
+        } else {
+            driver.showUnavailable(false);
+        }
     }
 
     void onTransportConnected() {
@@ -92,10 +124,11 @@ final class PortalReadinessCoordinator {
             driver.showUnavailable(terminalTlsFailure);
             return;
         }
-        if (episodeActive) {
-            maybeStartProbe();
-        } else {
+        if (!episodeActive) {
             beginEpisode();
+        } else {
+            driver.showConnecting();
+            maybeStartProbe();
         }
     }
 
@@ -112,22 +145,34 @@ final class PortalReadinessCoordinator {
         if (!started) {
             return;
         }
+        rootNavigationPending = true;
+        invalidateNavigation();
         if (terminalFailure) {
             driver.showUnavailable(terminalTlsFailure);
             return;
         }
         if (transportConnected && readinessConfirmed && !episodeActive) {
-            driver.navigateToPortalRoot();
+            navigateToPortalRoot();
             return;
         }
-        beginEpisode();
+        if (!episodeActive) {
+            beginEpisode();
+        } else {
+            driver.showConnecting();
+            maybeStartProbe();
+        }
+    }
+
+    long onMainFrameLoadRequested() {
+        expectedNavigationIdentity = ++navigationIdentitySequence;
+        return expectedNavigationIdentity;
     }
 
     void onRetryDue(long retryEpisode) {
         if (!isCurrentActiveEpisode(retryEpisode)) {
             return;
         }
-        if (clock.nowMillis() >= deadlineMillis) {
+        if (isExpired()) {
             expireEpisode();
             return;
         }
@@ -146,26 +191,39 @@ final class PortalReadinessCoordinator {
         expireEpisode();
     }
 
-    void onProbeCompleted(long completedEpisode, PortalReadinessResult result) {
-        if (!probeInFlight || completedEpisode != probeEpisode) {
+    void onProbeSlotAvailable() {
+        if (!waitingForProbeSlot) {
+            return;
+        }
+        waitingForProbeSlot = false;
+        maybeStartProbe();
+    }
+
+    void onProbeCompleted(long completedProbeIdentity, PortalReadinessResult result) {
+        if (!probeInFlight || completedProbeIdentity != activeProbeIdentity) {
             return;
         }
         probeInFlight = false;
-        if (!isCurrentActiveEpisode(completedEpisode)) {
+        boolean mayAcceptResult = probeResultEligible
+                && activeProbeEpisode == episode
+                && isCurrentActiveEpisode(activeProbeEpisode)
+                && transportConnected;
+        probeResultEligible = false;
+        if (!mayAcceptResult) {
             maybeStartProbe();
             return;
         }
-        if (clock.nowMillis() >= deadlineMillis) {
+        if (isExpired()) {
             expireEpisode();
             return;
         }
         switch (result) {
             case READY:
                 readinessConfirmed = true;
-                if (activeAllowedPage) {
-                    finishReadyEpisode();
+                if (rootNavigationPending || !activeAllowedPage) {
+                    navigateToPortalRoot();
                 } else {
-                    driver.navigateToPortalRoot();
+                    finishReadyEpisode();
                 }
                 return;
             case FATAL_TLS:
@@ -180,8 +238,18 @@ final class PortalReadinessCoordinator {
         }
     }
 
-    void onMainFrameSucceeded() {
+    void onMainFrameSucceeded(long navigationIdentity) {
+        if (navigationIdentity == NO_NAVIGATION
+                || navigationIdentity != expectedNavigationIdentity) {
+            return;
+        }
+        expectedNavigationIdentity = NO_NAVIGATION;
+        if (episodeActive && isExpired()) {
+            expireEpisode();
+            return;
+        }
         activeAllowedPage = true;
+        rootNavigationPending = false;
         if (!started || !transportConnected || !readinessConfirmed) {
             return;
         }
@@ -192,7 +260,12 @@ final class PortalReadinessCoordinator {
         }
     }
 
-    void onMainFrameFailed(PortalReadinessResult failure) {
+    void onMainFrameFailed(long navigationIdentity, PortalReadinessResult failure) {
+        if (navigationIdentity == NO_NAVIGATION
+                || navigationIdentity != expectedNavigationIdentity) {
+            return;
+        }
+        expectedNavigationIdentity = NO_NAVIGATION;
         if (!started || terminalFailure || !transportConnected) {
             return;
         }
@@ -209,15 +282,22 @@ final class PortalReadinessCoordinator {
             beginEpisode();
             return;
         }
+        if (isExpired()) {
+            expireEpisode();
+            return;
+        }
         readinessConfirmed = false;
         driver.showConnecting();
         maybeStartProbe();
     }
 
     private void beginEpisode() {
+        invalidateProbeResult();
+        invalidateNavigation();
         episode++;
         episodeActive = true;
         readinessConfirmed = false;
+        waitingForProbeSlot = false;
         retryNumber = 0;
         deadlineMillis = clock.nowMillis() + EPISODE_BUDGET_MILLIS;
         driver.cancelScheduledWork();
@@ -227,7 +307,8 @@ final class PortalReadinessCoordinator {
     }
 
     private void maybeStartProbe() {
-        if (!started || !transportConnected || !episodeActive || probeInFlight) {
+        if (!started || !transportConnected || !episodeActive
+                || probeInFlight || waitingForProbeSlot) {
             return;
         }
         long remaining = deadlineMillis - clock.nowMillis();
@@ -235,11 +316,15 @@ final class PortalReadinessCoordinator {
             expireEpisode();
             return;
         }
+        long probeIdentity = ++probeIdentitySequence;
         probeInFlight = true;
-        probeEpisode = episode;
-        if (!driver.startProbe(episode, remaining)) {
+        probeResultEligible = true;
+        activeProbeIdentity = probeIdentity;
+        activeProbeEpisode = episode;
+        if (!driver.startProbe(probeIdentity, remaining)) {
             probeInFlight = false;
-            scheduleRetry();
+            probeResultEligible = false;
+            waitingForProbeSlot = true;
         }
     }
 
@@ -253,10 +338,19 @@ final class PortalReadinessCoordinator {
         driver.scheduleRetry(episode, delay);
     }
 
+    private void navigateToPortalRoot() {
+        long navigationIdentity = onMainFrameLoadRequested();
+        driver.navigateToPortalRoot(navigationIdentity);
+    }
+
     private void finishReadyEpisode() {
         episodeActive = false;
         driver.cancelScheduledWork();
         driver.revealPortal();
+    }
+
+    private boolean isExpired() {
+        return clock.nowMillis() >= deadlineMillis;
     }
 
     private void expireEpisode() {
@@ -266,8 +360,10 @@ final class PortalReadinessCoordinator {
     private void failEpisode(boolean tlsFailure) {
         episodeActive = false;
         readinessConfirmed = false;
+        waitingForProbeSlot = false;
         terminalFailure = true;
         terminalTlsFailure = tlsFailure;
+        invalidateNavigation();
         driver.cancelScheduledWork();
         driver.showUnavailable(tlsFailure);
     }
@@ -276,7 +372,16 @@ final class PortalReadinessCoordinator {
         episode++;
         episodeActive = false;
         readinessConfirmed = false;
+        waitingForProbeSlot = false;
         driver.cancelScheduledWork();
+    }
+
+    private void invalidateProbeResult() {
+        probeResultEligible = false;
+    }
+
+    private void invalidateNavigation() {
+        expectedNavigationIdentity = NO_NAVIGATION;
     }
 
     private boolean isCurrentActiveEpisode(long candidateEpisode) {

@@ -33,7 +33,8 @@ public final class PortalReadinessCoordinatorTest {
         assertEquals(250L, fixture.driver.retries.get(0).delayMillis);
 
         fixture.coordinator.onRetryDue(episode);
-        fixture.coordinator.onProbeCompleted(episode, PortalReadinessResult.READY);
+        fixture.coordinator.onProbeCompleted(
+                fixture.driver.lastProbeEpisode(), PortalReadinessResult.READY);
 
         assertEquals(2, fixture.driver.probes.size());
         assertEquals(1, fixture.driver.navigationCount);
@@ -55,6 +56,24 @@ public final class PortalReadinessCoordinatorTest {
         assertEquals(2, fixture.driver.probes.size());
         assertEquals(newEpisode, fixture.driver.lastProbeEpisode());
         assertEquals(0, fixture.driver.navigationCount);
+    }
+
+    @Test
+    public void recreatedOwnerWaitsForProcessProbeSlotWithoutBackoffPolling() {
+        Fixture fixture = new Fixture();
+        fixture.driver.probeSlotAvailable = false;
+
+        fixture.coordinator.onTransportConnected();
+
+        assertEquals(1, fixture.driver.probeStartRequests);
+        assertEquals(0, fixture.driver.probes.size());
+        assertEquals(0, fixture.driver.retries.size());
+
+        fixture.driver.probeSlotAvailable = true;
+        fixture.coordinator.onProbeSlotAvailable();
+
+        assertEquals(2, fixture.driver.probeStartRequests);
+        assertEquals(1, fixture.driver.probes.size());
     }
 
     @Test
@@ -119,7 +138,7 @@ public final class PortalReadinessCoordinatorTest {
         fixture.coordinator.onTransportConnected();
         long firstEpisode = fixture.driver.lastProbeEpisode();
         fixture.coordinator.onProbeCompleted(firstEpisode, PortalReadinessResult.READY);
-        fixture.coordinator.onMainFrameSucceeded();
+        fixture.completeLastNavigationSuccessfully();
         assertEquals(1, fixture.driver.navigationCount);
 
         fixture.coordinator.onTransportDisconnected();
@@ -137,7 +156,7 @@ public final class PortalReadinessCoordinatorTest {
         fixture.coordinator.onTransportConnected();
         long episode = fixture.driver.lastProbeEpisode();
         fixture.coordinator.onProbeCompleted(episode, PortalReadinessResult.READY);
-        fixture.coordinator.onMainFrameSucceeded();
+        fixture.completeLastNavigationSuccessfully();
 
         fixture.coordinator.onTransportConnected();
         fixture.coordinator.onTransportConnected();
@@ -155,11 +174,12 @@ public final class PortalReadinessCoordinatorTest {
         assertEquals(1, fixture.driver.navigationCount);
         fixture.clock.nowMillis = 10_000L;
 
-        fixture.coordinator.onMainFrameFailed(PortalReadinessResult.RETRYABLE);
+        fixture.failLastNavigation(PortalReadinessResult.RETRYABLE);
 
         assertEquals(2, fixture.driver.probes.size());
-        assertEquals(episode, fixture.driver.lastProbeEpisode());
-        fixture.coordinator.onProbeCompleted(episode, PortalReadinessResult.READY);
+        assertEquals(1, fixture.driver.deadlines.size());
+        fixture.coordinator.onProbeCompleted(
+                fixture.driver.lastProbeEpisode(), PortalReadinessResult.READY);
         assertEquals(2, fixture.driver.navigationCount);
     }
 
@@ -170,7 +190,7 @@ public final class PortalReadinessCoordinatorTest {
         long episode = fixture.driver.lastProbeEpisode();
         fixture.coordinator.onProbeCompleted(episode, PortalReadinessResult.READY);
 
-        fixture.coordinator.onMainFrameFailed(PortalReadinessResult.FATAL_TLS);
+        fixture.failLastNavigation(PortalReadinessResult.FATAL_TLS);
 
         assertEquals(1, fixture.driver.probes.size());
         assertEquals(1, fixture.driver.tlsUnavailableCount);
@@ -184,8 +204,11 @@ public final class PortalReadinessCoordinatorTest {
         long episode = fixture.driver.lastProbeEpisode();
         fixture.coordinator.onProbeCompleted(episode, PortalReadinessResult.READY);
 
-        fixture.coordinator.onMainFrameFailed(PortalReadinessResult.FATAL_TLS);
-        fixture.coordinator.onMainFrameFailed(PortalReadinessResult.RETRYABLE);
+        long failedNavigation = fixture.driver.lastNavigationIdentity;
+        fixture.coordinator.onMainFrameFailed(
+                failedNavigation, PortalReadinessResult.FATAL_TLS);
+        fixture.coordinator.onMainFrameFailed(
+                failedNavigation, PortalReadinessResult.RETRYABLE);
 
         assertEquals(1, fixture.driver.probes.size());
         assertEquals(1, fixture.driver.tlsUnavailableCount);
@@ -216,10 +239,12 @@ public final class PortalReadinessCoordinatorTest {
         fixture.coordinator.onTransportConnected();
         long firstEpisode = fixture.driver.lastProbeEpisode();
         fixture.coordinator.onProbeCompleted(firstEpisode, PortalReadinessResult.READY);
-        fixture.coordinator.onMainFrameSucceeded();
+        long staleNavigation = fixture.driver.lastNavigationIdentity;
+        fixture.completeLastNavigationSuccessfully();
 
         fixture.coordinator.onTransportDisconnected();
-        fixture.coordinator.onMainFrameFailed(PortalReadinessResult.RETRYABLE);
+        fixture.coordinator.onMainFrameFailed(
+                staleNavigation, PortalReadinessResult.RETRYABLE);
         fixture.coordinator.onTransportConnected();
         long reconnectEpisode = fixture.driver.lastProbeEpisode();
         fixture.coordinator.onProbeCompleted(reconnectEpisode, PortalReadinessResult.READY);
@@ -236,16 +261,151 @@ public final class PortalReadinessCoordinatorTest {
 
         long[] expectedDelays = {250L, 500L, 1_000L, 2_000L, 4_000L, 4_000L};
         for (long expectedDelay : expectedDelays) {
-            fixture.coordinator.onProbeCompleted(episode, PortalReadinessResult.RETRYABLE);
+            fixture.coordinator.onProbeCompleted(
+                    fixture.driver.lastProbeEpisode(), PortalReadinessResult.RETRYABLE);
             assertEquals(expectedDelay,
                     fixture.driver.retries.get(fixture.driver.retries.size() - 1).delayMillis);
             fixture.coordinator.onRetryDue(episode);
         }
 
         fixture.clock.nowMillis = 44_000L;
-        fixture.coordinator.onProbeCompleted(episode, PortalReadinessResult.RETRYABLE);
+        fixture.coordinator.onProbeCompleted(
+                fixture.driver.lastProbeEpisode(), PortalReadinessResult.RETRYABLE);
 
         assertEquals(expectedDelays.length, fixture.driver.retries.size());
+    }
+
+    @Test
+    public void transportFlapsCannotRestartTheOriginalRecoveryDeadline() {
+        Fixture fixture = new Fixture();
+        fixture.coordinator.onTransportConnected();
+        long originalEpisode = fixture.driver.lastDeadlineEpisode();
+        fixture.clock.nowMillis = 44_000L;
+
+        fixture.coordinator.onTransportConnecting();
+        fixture.coordinator.onTransportDisconnected();
+        fixture.coordinator.onTransportConnected();
+        fixture.clock.nowMillis = 45_000L;
+        fixture.coordinator.onDeadline(originalEpisode);
+
+        assertEquals(1, fixture.driver.unavailableCount);
+        assertFalse(fixture.driver.connectingVisible);
+    }
+
+    @Test
+    public void connectingWithoutConnectedStillExpiresAtOneBudget() {
+        Fixture fixture = new Fixture();
+
+        fixture.coordinator.onTransportConnecting();
+        long episode = fixture.driver.lastDeadlineEpisode();
+        fixture.clock.nowMillis = 45_000L;
+        fixture.coordinator.onDeadline(episode);
+
+        assertEquals(1, fixture.driver.unavailableCount);
+        assertEquals(0, fixture.driver.probes.size());
+    }
+
+    @Test
+    public void staleFailureAfterReconnectCannotClearLoadedWorkflow() {
+        Fixture fixture = loadedWorkflow();
+        long staleNavigation = fixture.driver.lastNavigationIdentity;
+
+        fixture.coordinator.onTransportDisconnected();
+        fixture.coordinator.onTransportConnected();
+        long reconnectEpisode = fixture.driver.lastProbeEpisode();
+        fixture.coordinator.onMainFrameFailed(
+                staleNavigation, PortalReadinessResult.RETRYABLE);
+        fixture.coordinator.onProbeCompleted(reconnectEpisode, PortalReadinessResult.READY);
+
+        assertEquals(1, fixture.driver.navigationCount);
+        assertEquals(2, fixture.driver.portalRevealCount);
+    }
+
+    @Test
+    public void staleSuccessAfterManualRetryCannotSatisfyNewNavigation() {
+        Fixture fixture = new Fixture();
+        fixture.coordinator.onTransportConnected();
+        long firstEpisode = fixture.driver.lastProbeEpisode();
+        fixture.coordinator.onProbeCompleted(firstEpisode, PortalReadinessResult.READY);
+        assertEquals(1, fixture.driver.navigationCount);
+        long staleNavigation = fixture.driver.lastNavigationIdentity;
+
+        fixture.coordinator.onManualRetry();
+        long retryEpisode = fixture.driver.lastProbeEpisode();
+        fixture.coordinator.onMainFrameSucceeded(staleNavigation);
+        fixture.coordinator.onProbeCompleted(retryEpisode, PortalReadinessResult.READY);
+
+        assertEquals(2, fixture.driver.navigationCount);
+        assertEquals(0, fixture.driver.portalRevealCount);
+    }
+
+    @Test
+    public void staleFailureCannotBorrowIdentityFromNewerNavigationRequest() {
+        Fixture fixture = new Fixture();
+        fixture.coordinator.onTransportConnected();
+        long episode = fixture.driver.lastProbeEpisode();
+        fixture.coordinator.onProbeCompleted(episode, PortalReadinessResult.READY);
+        long staleNavigation = fixture.driver.lastNavigationIdentity;
+        long newerNavigation = fixture.coordinator.onMainFrameLoadRequested();
+
+        fixture.coordinator.onMainFrameFailed(
+                staleNavigation, PortalReadinessResult.RETRYABLE);
+        fixture.coordinator.onMainFrameSucceeded(newerNavigation);
+
+        assertEquals(1, fixture.driver.probes.size());
+        assertEquals(1, fixture.driver.portalRevealCount);
+    }
+
+    @Test
+    public void homeDuringReconnectNavigatesRootOnceAfterReadiness() {
+        Fixture fixture = loadedWorkflow();
+
+        fixture.coordinator.onTransportDisconnected();
+        fixture.coordinator.onPortalRootRequested();
+        fixture.coordinator.onTransportConnected();
+        long reconnectEpisode = fixture.driver.lastProbeEpisode();
+        fixture.coordinator.onProbeCompleted(reconnectEpisode, PortalReadinessResult.READY);
+
+        assertEquals(2, fixture.driver.navigationCount);
+        assertEquals(1, fixture.driver.portalRevealCount);
+    }
+
+    @Test
+    public void homeDuringReconnectProbeRemainsPendingUntilReady() {
+        Fixture fixture = loadedWorkflow();
+
+        fixture.coordinator.onTransportDisconnected();
+        fixture.coordinator.onTransportConnected();
+        long reconnectProbe = fixture.driver.lastProbeEpisode();
+        fixture.coordinator.onPortalRootRequested();
+        fixture.coordinator.onProbeCompleted(reconnectProbe, PortalReadinessResult.READY);
+
+        assertEquals(2, fixture.driver.navigationCount);
+        assertEquals(1, fixture.driver.portalRevealCount);
+    }
+
+    @Test
+    public void mainFrameSuccessAfterDeadlineCannotRevealPortalBeforeTimerRuns() {
+        Fixture fixture = new Fixture();
+        fixture.coordinator.onTransportConnected();
+        long episode = fixture.driver.lastProbeEpisode();
+        fixture.clock.nowMillis = 44_000L;
+        fixture.coordinator.onProbeCompleted(episode, PortalReadinessResult.READY);
+        fixture.clock.nowMillis = 46_000L;
+
+        fixture.completeLastNavigationSuccessfully();
+
+        assertEquals(1, fixture.driver.unavailableCount);
+        assertEquals(0, fixture.driver.portalRevealCount);
+    }
+
+    private static Fixture loadedWorkflow() {
+        Fixture fixture = new Fixture();
+        fixture.coordinator.onTransportConnected();
+        long episode = fixture.driver.lastProbeEpisode();
+        fixture.coordinator.onProbeCompleted(episode, PortalReadinessResult.READY);
+        fixture.completeLastNavigationSuccessfully();
+        return fixture;
     }
 
     private static final class Fixture {
@@ -256,6 +416,14 @@ public final class PortalReadinessCoordinatorTest {
 
         Fixture() {
             coordinator.onStart();
+        }
+
+        void completeLastNavigationSuccessfully() {
+            coordinator.onMainFrameSucceeded(driver.lastNavigationIdentity);
+        }
+
+        void failLastNavigation(PortalReadinessResult failure) {
+            coordinator.onMainFrameFailed(driver.lastNavigationIdentity, failure);
         }
     }
 
@@ -288,6 +456,9 @@ public final class PortalReadinessCoordinatorTest {
         int tlsUnavailableCount;
         boolean connectingVisible;
         boolean lastUnavailableWasTls;
+        long lastNavigationIdentity;
+        boolean probeSlotAvailable = true;
+        int probeStartRequests;
 
         @Override
         public void showConnecting() {
@@ -311,12 +482,17 @@ public final class PortalReadinessCoordinatorTest {
         }
 
         @Override
-        public void navigateToPortalRoot() {
+        public void navigateToPortalRoot(long navigationIdentity) {
             navigationCount++;
+            lastNavigationIdentity = navigationIdentity;
         }
 
         @Override
         public boolean startProbe(long episode, long remainingMillis) {
+            probeStartRequests++;
+            if (!probeSlotAvailable) {
+                return false;
+            }
             probes.add(new Scheduled(episode, remainingMillis));
             return true;
         }
