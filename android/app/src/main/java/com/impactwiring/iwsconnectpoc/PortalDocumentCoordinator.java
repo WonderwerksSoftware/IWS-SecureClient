@@ -15,6 +15,11 @@ final class PortalDocumentCoordinator {
         navigation.expect(navigationIdentity, url);
     }
 
+    void expectReplacing(long navigationIdentity, String url, String baselineEpoch) {
+        loadRecovery.onMainFrameLoadRequested();
+        navigation.expectReplacing(navigationIdentity, url, baselineEpoch);
+    }
+
     boolean expects(String url) {
         return navigation.expects(url);
     }
@@ -33,16 +38,27 @@ final class PortalDocumentCoordinator {
             CurrentDocumentObservation observation,
             String currentUrl,
             boolean allowedObservedUrl) {
+        if (!navigation.isCurrentPending(navigationIdentity, currentUrl)) {
+            return;
+        }
         if (!observation.complete) {
             return;
         }
+        if (!navigation.acceptsEpoch(
+                navigationIdentity, observation.documentEpoch, currentUrl)) {
+            return;
+        }
         boolean expectedLocation = allowedObservedUrl && navigation.acceptsObservation(
-                navigationIdentity, observation.url, currentUrl);
+                navigationIdentity,
+                observation.url,
+                observation.documentEpoch,
+                currentUrl);
         CurrentDocumentDecision.Outcome outcome =
                 CurrentDocumentDecision.decide(expectedLocation, observation);
         switch (outcome) {
             case SUCCESS:
-                navigation.complete(navigationIdentity, observation.url);
+                navigation.complete(
+                        navigationIdentity, observation.url, observation.documentEpoch);
                 if (loadRecovery.mayRevealPortal(true)) {
                     readiness.onMainFrameSucceeded(navigationIdentity);
                 }
@@ -62,6 +78,12 @@ final class PortalDocumentCoordinator {
 
     void invalidatePending() {
         navigation.invalidatePending();
+    }
+
+    void onPreparationFailed(long navigationIdentity) {
+        loadRecovery.onMainFrameLoadFailed();
+        readiness.onMainFrameFailed(
+                navigationIdentity, PortalReadinessResult.PERMANENT);
     }
 
     void onTlsError(String currentUrl) {

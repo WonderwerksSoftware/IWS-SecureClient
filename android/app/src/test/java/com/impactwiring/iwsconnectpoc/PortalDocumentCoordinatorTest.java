@@ -21,11 +21,11 @@ public final class PortalDocumentCoordinatorTest {
         fixture.readiness.onProbeCompleted(
                 fixture.driver.lastProbe(), PortalReadinessResult.READY);
         long replacement = fixture.driver.lastNavigation;
-        fixture.documents.expect(replacement, ROOT);
+        fixture.documents.expectReplacing(replacement, ROOT, "1000");
         fixture.documents.onStarted(ROOT, ROOT);
 
         fixture.documents.onObservation(
-                replacement, success(ROOT), ROOT, true);
+                replacement, success(ROOT, "2000"), ROOT, true);
 
         assertEquals(1, fixture.driver.reveals);
         assertEquals(2, fixture.driver.navigations);
@@ -41,7 +41,7 @@ public final class PortalDocumentCoordinatorTest {
         fixture.readiness.onProbeCompleted(
                 fixture.driver.lastProbe(), PortalReadinessResult.READY);
         long replacement = fixture.driver.lastNavigation;
-        fixture.documents.expect(replacement, ROOT);
+        fixture.documents.expectReplacing(replacement, ROOT, "1000");
         fixture.documents.onStarted(ROOT, ROOT);
 
         fixture.documents.onObservation(
@@ -55,7 +55,7 @@ public final class PortalDocumentCoordinatorTest {
         fixture.documents.onObservation(
                 replacement,
                 CurrentDocumentObservation.parse(
-                        "\"C|0|chrome-error%3A%2F%2Fchromewebdata%2F\""),
+                        "\"C|0|2000|chrome-error%3A%2F%2Fchromewebdata%2F\""),
                 ROOT,
                 false);
 
@@ -82,9 +82,117 @@ public final class PortalDocumentCoordinatorTest {
         assertEquals(1, fixture.driver.tlsFailures);
     }
 
+    @Test
+    public void staleChromeErrorIdentityCannotPoisonReplacementSuccess() {
+        Fixture fixture = new Fixture();
+        long oldNavigation = fixture.beginInitialNavigation();
+        fixture.documents.expect(oldNavigation, ROOT);
+        fixture.documents.onStarted(ROOT, ROOT);
+        fixture.readiness.onManualRetry();
+        fixture.readiness.onProbeCompleted(
+                fixture.driver.lastProbe(), PortalReadinessResult.READY);
+        long replacement = fixture.driver.lastNavigation;
+        fixture.documents.expectReplacing(replacement, ROOT, "1000");
+        fixture.documents.onStarted(ROOT, ROOT);
+
+        fixture.documents.onObservation(
+                oldNavigation,
+                CurrentDocumentObservation.parse(
+                        "\"C|0|1000|chrome-error%3A%2F%2Fchromewebdata%2F\""),
+                ROOT,
+                false);
+        fixture.documents.onObservation(
+                replacement, success(ROOT, "2000"), ROOT, true);
+
+        assertEquals(1, fixture.driver.reveals);
+        assertEquals(2, fixture.driver.probes.size());
+    }
+
+    @Test
+    public void duplicateFailedIdentityCannotPoisonLaterReplacementSuccess() {
+        Fixture fixture = new Fixture();
+        long failedNavigation = fixture.beginInitialNavigation();
+        fixture.documents.expect(failedNavigation, ROOT);
+        fixture.documents.onStarted(ROOT, ROOT);
+        CurrentDocumentObservation errorDocument = CurrentDocumentObservation.parse(
+                "\"C|0|1000|chrome-error%3A%2F%2Fchromewebdata%2F\"");
+        fixture.documents.onObservation(
+                failedNavigation, errorDocument, ROOT, false);
+        fixture.readiness.onProbeCompleted(
+                fixture.driver.lastProbe(), PortalReadinessResult.READY);
+        long replacement = fixture.driver.lastNavigation;
+        fixture.documents.expectReplacing(replacement, ROOT, "1000");
+        fixture.documents.onStarted(ROOT, ROOT);
+
+        fixture.documents.onObservation(
+                failedNavigation, errorDocument, ROOT, false);
+        fixture.documents.onObservation(
+                replacement, success(ROOT, "2000"), ROOT, true);
+
+        assertEquals(1, fixture.driver.reveals);
+        assertEquals(2, fixture.driver.probes.size());
+    }
+
+    @Test
+    public void sameUrlPriorCompleteDocumentCannotSatisfyReplacement() {
+        Fixture fixture = new Fixture();
+        long oldNavigation = fixture.beginInitialNavigation();
+        fixture.documents.expect(oldNavigation, ROOT);
+        fixture.documents.onStarted(ROOT, ROOT);
+        fixture.readiness.onManualRetry();
+        fixture.readiness.onProbeCompleted(
+                fixture.driver.lastProbe(), PortalReadinessResult.READY);
+        long replacement = fixture.driver.lastNavigation;
+        fixture.documents.expectReplacing(replacement, ROOT, "1000");
+        fixture.documents.onStarted(ROOT, ROOT);
+
+        fixture.documents.onObservation(
+                replacement, success(ROOT, "1000"), ROOT, true);
+
+        assertEquals(0, fixture.driver.reveals);
+
+        fixture.documents.onObservation(
+                replacement,
+                CurrentDocumentObservation.parse(
+                        "\"C|0|2000|chrome-error%3A%2F%2Fchromewebdata%2F\""),
+                ROOT,
+                false);
+        assertEquals(3, fixture.driver.probes.size());
+    }
+
+    @Test
+    public void priorChromeErrorEpochCannotFailReplacement() {
+        Fixture fixture = new Fixture();
+        long oldNavigation = fixture.beginInitialNavigation();
+        fixture.documents.expect(oldNavigation, ROOT);
+        fixture.documents.onStarted(ROOT, ROOT);
+        fixture.readiness.onManualRetry();
+        fixture.readiness.onProbeCompleted(
+                fixture.driver.lastProbe(), PortalReadinessResult.READY);
+        long replacement = fixture.driver.lastNavigation;
+        fixture.documents.expectReplacing(replacement, ROOT, "1000");
+        fixture.documents.onStarted(ROOT, ROOT);
+
+        fixture.documents.onObservation(
+                replacement,
+                CurrentDocumentObservation.parse(
+                        "\"C|0|1000|chrome-error%3A%2F%2Fchromewebdata%2F\""),
+                ROOT,
+                false);
+        assertEquals(2, fixture.driver.probes.size());
+
+        fixture.documents.onObservation(
+                replacement, success(ROOT, "2000"), ROOT, true);
+        assertEquals(1, fixture.driver.reveals);
+    }
+
     private static CurrentDocumentObservation success(String url) {
+        return success(url, "3000");
+    }
+
+    private static CurrentDocumentObservation success(String url, String epoch) {
         return CurrentDocumentObservation.parse(
-                "\"C|200|" + url
+                "\"C|200|" + epoch + "|" + url
                         .replace(":", "%3A")
                         .replace("/", "%2F") + "\"");
     }
@@ -123,6 +231,9 @@ public final class PortalDocumentCoordinatorTest {
         @Override public void revealPortal() { reveals++; }
         @Override public void navigateToPortalRoot(long navigationIdentity) {
             navigations++;
+            lastNavigation = navigationIdentity;
+        }
+        @Override public void restorePortalState(long navigationIdentity) {
             lastNavigation = navigationIdentity;
         }
         @Override public boolean startProbe(long probeIdentity, long remainingMillis) {

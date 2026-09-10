@@ -8,7 +8,7 @@ public final class CurrentDocumentDecisionTest {
     @Test
     public void staleErrorHintCannotOverrideHealthyCurrentDocument() {
         CurrentDocumentObservation observation = CurrentDocumentObservation.parse(
-                "\"C|200|https%3A%2F%2Fportal.iws.example%2F\"");
+                "\"C|200|1|https%3A%2F%2Fportal.iws.example%2F\"");
 
         assertEquals(CurrentDocumentDecision.Outcome.SUCCESS,
                 CurrentDocumentDecision.decide(true, observation));
@@ -17,7 +17,7 @@ public final class CurrentDocumentDecisionTest {
     @Test
     public void cachedValidatedNavigationStatusIsUsable() {
         CurrentDocumentObservation observation = CurrentDocumentObservation.parse(
-                "\"C|304|https%3A%2F%2Fportal.iws.example%2F\"");
+                "\"C|304|2|https%3A%2F%2Fportal.iws.example%2F\"");
 
         assertEquals(CurrentDocumentDecision.Outcome.SUCCESS,
                 CurrentDocumentDecision.decide(true, observation));
@@ -26,9 +26,9 @@ public final class CurrentDocumentDecisionTest {
     @Test
     public void currentHttpStatusesRemainFailureClassified() {
         CurrentDocumentObservation unavailable = CurrentDocumentObservation.parse(
-                "\"C|503|https%3A%2F%2Fportal.iws.example%2F\"");
+                "\"C|503|3|https%3A%2F%2Fportal.iws.example%2F\"");
         CurrentDocumentObservation rejected = CurrentDocumentObservation.parse(
-                "\"C|404|https%3A%2F%2Fportal.iws.example%2F\"");
+                "\"C|404|4|https%3A%2F%2Fportal.iws.example%2F\"");
 
         assertEquals(CurrentDocumentDecision.Outcome.RETRYABLE_FAILURE,
                 CurrentDocumentDecision.decide(true, unavailable));
@@ -39,7 +39,7 @@ public final class CurrentDocumentDecisionTest {
     @Test
     public void unsupportedResponseStatusIsExplicitNotAHiddenTimeout() {
         CurrentDocumentObservation observation = CurrentDocumentObservation.parse(
-                "\"C|-1|https%3A%2F%2Fportal.iws.example%2F\"");
+                "\"C|-1|5|https%3A%2F%2Fportal.iws.example%2F\"");
 
         assertEquals(CurrentDocumentDecision.Outcome.UNSUPPORTED,
                 CurrentDocumentDecision.decide(true, observation));
@@ -55,7 +55,7 @@ public final class CurrentDocumentDecisionTest {
     @Test
     public void currentChromeErrorRetriesWithoutBorrowingCallbackErrorCode() {
         CurrentDocumentObservation errorDocument = CurrentDocumentObservation.parse(
-                "\"C|0|chrome-error%3A%2F%2Fchromewebdata%2F\"");
+                "\"C|0|6|chrome-error%3A%2F%2Fchromewebdata%2F\"");
 
         assertEquals(CurrentDocumentDecision.Outcome.RETRYABLE_FAILURE,
                 CurrentDocumentDecision.decide(false, errorDocument));

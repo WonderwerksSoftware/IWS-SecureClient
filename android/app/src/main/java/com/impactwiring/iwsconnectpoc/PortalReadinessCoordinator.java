@@ -17,6 +17,8 @@ final class PortalReadinessCoordinator {
 
         void navigateToPortalRoot(long navigationIdentity);
 
+        void restorePortalState(long navigationIdentity);
+
         boolean startProbe(long probeIdentity, long remainingMillis);
 
         void scheduleRetry(long episode, long delayMillis);
@@ -39,6 +41,8 @@ final class PortalReadinessCoordinator {
     private boolean readinessConfirmed;
     private boolean activeAllowedPage;
     private boolean rootNavigationPending;
+    private boolean restoredStatePending;
+    private boolean restoringState;
     private boolean terminalFailure;
     private boolean terminalTlsFailure;
     private boolean probeInFlight;
@@ -68,6 +72,7 @@ final class PortalReadinessCoordinator {
         invalidateProbeResult();
         probeInFlight = false;
         waitingForProbeSlot = false;
+        restoringState = false;
         invalidateNavigation();
         cancelEpisode();
     }
@@ -79,6 +84,7 @@ final class PortalReadinessCoordinator {
         if (transportConnected) {
             transportConnected = false;
             readinessConfirmed = false;
+            restoringState = false;
             invalidateProbeResult();
             invalidateNavigation();
         }
@@ -101,6 +107,7 @@ final class PortalReadinessCoordinator {
         if (connectionWasActive) {
             transportConnected = false;
             readinessConfirmed = false;
+            restoringState = false;
             invalidateProbeResult();
             invalidateNavigation();
         }
@@ -163,6 +170,11 @@ final class PortalReadinessCoordinator {
             driver.showConnecting();
             maybeStartProbe();
         }
+    }
+
+    void onRestoredStatePending() {
+        restoredStatePending = true;
+        activeAllowedPage = false;
     }
 
     long onMainFrameLoadRequested() {
@@ -229,7 +241,9 @@ final class PortalReadinessCoordinator {
         switch (result) {
             case READY:
                 readinessConfirmed = true;
-                if (rootNavigationPending || !activeAllowedPage) {
+                if (restoredStatePending) {
+                    restorePortalState();
+                } else if (rootNavigationPending || !activeAllowedPage) {
                     navigateToPortalRoot();
                 } else {
                     finishReadyEpisode();
@@ -257,7 +271,14 @@ final class PortalReadinessCoordinator {
             expireEpisode();
             return;
         }
+        boolean completedRestoration = restoringState;
+        restoringState = false;
         activeAllowedPage = true;
+        restoredStatePending = false;
+        if (completedRestoration && rootNavigationPending) {
+            navigateToPortalRoot();
+            return;
+        }
         rootNavigationPending = false;
         if (!started || !transportConnected || !readinessConfirmed) {
             return;
@@ -275,6 +296,7 @@ final class PortalReadinessCoordinator {
             return;
         }
         expectedNavigationIdentity = NO_NAVIGATION;
+        restoringState = false;
         if (!started || terminalFailure || !transportConnected) {
             return;
         }
@@ -303,6 +325,7 @@ final class PortalReadinessCoordinator {
     private void beginEpisode() {
         invalidateProbeResult();
         invalidateNavigation();
+        restoringState = false;
         episode++;
         episodeActive = true;
         readinessConfirmed = false;
@@ -352,6 +375,13 @@ final class PortalReadinessCoordinator {
         driver.navigateToPortalRoot(navigationIdentity);
     }
 
+    private void restorePortalState() {
+        restoredStatePending = false;
+        restoringState = true;
+        long navigationIdentity = onMainFrameLoadRequested();
+        driver.restorePortalState(navigationIdentity);
+    }
+
     private void finishReadyEpisode() {
         episodeActive = false;
         driver.cancelScheduledWork();
@@ -372,6 +402,7 @@ final class PortalReadinessCoordinator {
         waitingForProbeSlot = false;
         terminalFailure = true;
         terminalTlsFailure = tlsFailure;
+        restoringState = false;
         invalidateNavigation();
         driver.cancelScheduledWork();
         driver.showUnavailable(tlsFailure);

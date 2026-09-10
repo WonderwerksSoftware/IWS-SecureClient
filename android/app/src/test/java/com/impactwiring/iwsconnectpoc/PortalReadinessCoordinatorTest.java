@@ -21,6 +21,44 @@ public final class PortalReadinessCoordinatorTest {
     }
 
     @Test
+    public void restoredHistoryWaitsForReadinessAndPreservesItsCurrentRoute() {
+        Fixture fixture = new Fixture();
+        fixture.coordinator.onRestoredStatePending();
+
+        fixture.coordinator.onTransportConnected();
+        assertEquals(0, fixture.driver.restoreCount);
+        long probe = fixture.driver.lastProbeEpisode();
+        fixture.coordinator.onProbeCompleted(probe, PortalReadinessResult.READY);
+
+        assertEquals(1, fixture.driver.restoreCount);
+        assertEquals(0, fixture.driver.navigationCount);
+        assertEquals(0, fixture.driver.portalRevealCount);
+
+        fixture.coordinator.onMainFrameSucceeded(fixture.driver.lastNavigationIdentity);
+
+        assertEquals(1, fixture.driver.portalRevealCount);
+    }
+
+    @Test
+    public void homeWithPendingRestoredHistoryPreservesHistoryThenNavigatesRoot() {
+        Fixture fixture = new Fixture();
+        fixture.coordinator.onRestoredStatePending();
+        fixture.coordinator.onPortalRootRequested();
+        fixture.coordinator.onTransportConnected();
+        fixture.coordinator.onProbeCompleted(
+                fixture.driver.lastProbeEpisode(), PortalReadinessResult.READY);
+
+        assertEquals(1, fixture.driver.restoreCount);
+        assertEquals(0, fixture.driver.navigationCount);
+        fixture.coordinator.onMainFrameSucceeded(fixture.driver.lastNavigationIdentity);
+
+        assertEquals(1, fixture.driver.navigationCount);
+        assertEquals(0, fixture.driver.portalRevealCount);
+        fixture.coordinator.onMainFrameSucceeded(fixture.driver.lastNavigationIdentity);
+        assertEquals(1, fixture.driver.portalRevealCount);
+    }
+
+    @Test
     public void transientProbeFailureRetriesAfterCompletionThenNavigatesOnSuccess() {
         Fixture fixture = new Fixture();
         fixture.coordinator.onTransportConnected();
@@ -507,6 +545,7 @@ public final class PortalReadinessCoordinatorTest {
         int portalRevealCount;
         int unavailableCount;
         int tlsUnavailableCount;
+        int restoreCount;
         boolean connectingVisible;
         boolean lastUnavailableWasTls;
         long lastNavigationIdentity;
@@ -537,6 +576,12 @@ public final class PortalReadinessCoordinatorTest {
         @Override
         public void navigateToPortalRoot(long navigationIdentity) {
             navigationCount++;
+            lastNavigationIdentity = navigationIdentity;
+        }
+
+        @Override
+        public void restorePortalState(long navigationIdentity) {
+            restoreCount++;
             lastNavigationIdentity = navigationIdentity;
         }
 

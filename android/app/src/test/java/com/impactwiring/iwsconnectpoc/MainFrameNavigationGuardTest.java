@@ -21,6 +21,7 @@ public final class MainFrameNavigationGuardTest {
         assertFalse(guard.acceptsObservation(
                 oldIdentity,
                 "https://portal.iws.example/build",
+                "epoch-old",
                 "https://portal.iws.example/inventory"));
     }
 
@@ -36,6 +37,7 @@ public final class MainFrameNavigationGuardTest {
         assertFalse(guard.acceptsObservation(
                 capturedIdentity,
                 "https://portal.iws.example/build",
+                "epoch-old",
                 "https://portal.iws.example/build"));
     }
 
@@ -66,20 +68,26 @@ public final class MainFrameNavigationGuardTest {
     }
 
     @Test
-    public void healthySameUrlReplacementNeedsOnlyCurrentDocumentObservation() {
+    public void sameUrlReplacementRequiresEpochDifferentFromPreNavigationDocument() {
         MainFrameNavigationGuard guard = started(
                 20L, "https://portal.iws.example/");
         guard.invalidatePending();
-        guard.expect(21L, "https://portal.iws.example/");
+        guard.expectReplacing(21L, "https://portal.iws.example/", "epoch-a");
         guard.onStarted(
                 "https://portal.iws.example/",
                 "https://portal.iws.example/");
         long replacementIdentity = guard.pendingIdentityForCurrentUrl(
                 "https://portal.iws.example/");
 
+        assertFalse(guard.acceptsObservation(
+                replacementIdentity,
+                "https://portal.iws.example/",
+                "epoch-a",
+                "https://portal.iws.example/"));
         assertTrue(guard.acceptsObservation(
                 replacementIdentity,
                 "https://portal.iws.example/",
+                "epoch-b",
                 "https://portal.iws.example/"));
     }
 
@@ -93,6 +101,7 @@ public final class MainFrameNavigationGuardTest {
         assertFalse(guard.acceptsObservation(
                 identity,
                 "https://portal.iws.example/build",
+                "epoch-build",
                 "https://portal.iws.example/inventory"));
     }
 
@@ -100,7 +109,7 @@ public final class MainFrameNavigationGuardTest {
     public void loadedDocumentKeepsTlsStateAfterNavigationCompletes() {
         MainFrameNavigationGuard guard = started(
                 50L, "https://portal.iws.example/build");
-        guard.complete(50L, "https://portal.iws.example/build");
+        guard.complete(50L, "https://portal.iws.example/build", "epoch-build");
 
         assertTrue(guard.hasCurrentDocument("https://portal.iws.example/build"));
         assertEquals(MainFrameNavigationGuard.NONE,
@@ -112,11 +121,29 @@ public final class MainFrameNavigationGuardTest {
     public void reconnectInvalidatesPendingButRetainsLoadedDocumentTlsState() {
         MainFrameNavigationGuard guard = started(
                 60L, "https://portal.iws.example/build");
-        guard.complete(60L, "https://portal.iws.example/build");
+        guard.complete(60L, "https://portal.iws.example/build", "epoch-build");
 
         guard.invalidatePending();
 
         assertTrue(guard.hasCurrentDocument("https://portal.iws.example/build"));
+    }
+
+    @Test
+    public void webOwnedSameDocumentHistoryNavigationMayKeepItsEpoch() {
+        MainFrameNavigationGuard guard = started(
+                70L, "https://portal.iws.example/build");
+        guard.complete(
+                70L, "https://portal.iws.example/build", "1000");
+        guard.expect(71L, "https://portal.iws.example/build#details");
+        guard.onStarted(
+                "https://portal.iws.example/build#details",
+                "https://portal.iws.example/build#details");
+
+        assertTrue(guard.acceptsObservation(
+                71L,
+                "https://portal.iws.example/build#details",
+                "1000",
+                "https://portal.iws.example/build#details"));
     }
 
     private static MainFrameNavigationGuard started(long identity, String url) {

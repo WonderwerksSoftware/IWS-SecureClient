@@ -38,12 +38,19 @@ import java.io.ByteArrayInputStream;
 public final class MainActivity extends Activity implements
         IwsVpnService.Observer, PortalReadinessCoordinator.Driver {
     private static final int VPN_PERMISSION_REQUEST = 4101;
+    private static final String STATE_HAS_WEBVIEW_HISTORY =
+            "com.impactwiring.iwsconnectpoc.HAS_WEBVIEW_HISTORY";
     private static final String CURRENT_DOCUMENT_QUERY =
             "(function(){"
             + "if(document.readyState!=='complete')return 'L';"
             + "var s=-1;try{var e=performance.getEntriesByType('navigation')[0];"
             + "if(e&&typeof e.responseStatus==='number')s=e.responseStatus;}catch(_e){}"
-            + "return 'C|'+s+'|'+encodeURIComponent(String(location.href));"
+            + "var o='';try{o=String(performance.timeOrigin);}catch(_e){}"
+            + "return 'C|'+s+'|'+o+'|'+encodeURIComponent(String(location.href));"
+            + "})()";
+    private static final String CURRENT_DOCUMENT_EPOCH_QUERY =
+            "(function(){try{return 'E|'+String(performance.timeOrigin);}"
+            + "catch(_e){return 'U';}"
             + "})()";
 
     private WebView webView;
@@ -62,6 +69,8 @@ public final class MainActivity extends Activity implements
     private PortalReadinessCoordinator readinessCoordinator;
     private PortalDocumentCoordinator documentCoordinator;
     private PortalProbeRunner probeRunner;
+    private Bundle pendingWebViewState;
+    private long nativeNavigationPreparation;
 
     private final ServiceConnection connection = new ServiceConnection() {
         @Override
@@ -89,8 +98,11 @@ public final class MainActivity extends Activity implements
         configurePortalPolicy();
         configureWebView();
         configureReadiness();
-        if (state != null) {
-            webView.restoreState(state);
+        if (state != null
+                && state.getBoolean(STATE_HAS_WEBVIEW_HISTORY, false)
+                && readinessCoordinator != null) {
+            pendingWebViewState = state;
+            readinessCoordinator.onRestoredStatePending();
         }
         registerSystemBackHandler();
         if (readinessCoordinator != null) {
@@ -121,6 +133,7 @@ public final class MainActivity extends Activity implements
         if (documentCoordinator != null) {
             documentCoordinator.invalidatePending();
         }
+        cancelNativeNavigationPreparation();
         if (bound) {
             service.setObserver(null);
             unbindService(connection);
@@ -142,7 +155,11 @@ public final class MainActivity extends Activity implements
 
     @Override
     protected void onSaveInstanceState(Bundle state) {
-        webView.saveState(state);
+        if (pendingWebViewState != null) {
+            state.putAll(pendingWebViewState);
+        } else if (webView.saveState(state) != null) {
+            state.putBoolean(STATE_HAS_WEBVIEW_HISTORY, true);
+        }
         super.onSaveInstanceState(state);
     }
 
@@ -489,6 +506,7 @@ public final class MainActivity extends Activity implements
         if (readinessCoordinator == null) {
             return;
         }
+        cancelNativeNavigationPreparation();
         documentCoordinator.invalidatePending();
         readinessCoordinator.onPortalRootRequested();
         if (!bound || service.transportState() != TransportState.CONNECTED) {
@@ -500,6 +518,7 @@ public final class MainActivity extends Activity implements
         if (readinessCoordinator == null) {
             return;
         }
+        cancelNativeNavigationPreparation();
         documentCoordinator.invalidatePending();
         readinessCoordinator.onManualRetry();
         requestVpnPermission();
@@ -551,12 +570,14 @@ public final class MainActivity extends Activity implements
                     break;
                 case CONNECTING:
                 case DISCONNECTING:
+                    cancelNativeNavigationPreparation();
                     documentCoordinator.invalidatePending();
                     readinessCoordinator.onTransportConnecting();
                     break;
                 case ERROR:
                 case DISCONNECTED:
                 default:
+                    cancelNativeNavigationPreparation();
                     documentCoordinator.invalidatePending();
                     readinessCoordinator.onTransportDisconnected();
                     break;
@@ -571,6 +592,7 @@ public final class MainActivity extends Activity implements
 
     @Override
     public void showUnavailable(boolean tlsFailure) {
+        cancelNativeNavigationPreparation();
         if (tlsFailure) {
             showConnectionState("IWS could not verify the portal connection.", true);
         } else {
@@ -581,13 +603,32 @@ public final class MainActivity extends Activity implements
 
     @Override
     public void revealPortal() {
+        cancelNativeNavigationPreparation();
         statusPane.setVisibility(View.GONE);
     }
 
     @Override
     public void navigateToPortalRoot(long navigationIdentity) {
-        documentCoordinator.expect(navigationIdentity, portalPolicy.portalRoot());
-        webView.loadUrl(portalPolicy.portalRoot());
+        prepareNativeNavigation(navigationIdentity, portalPolicy.portalRoot());
+    }
+
+    @Override
+    public void restorePortalState(long navigationIdentity) {
+        Bundle state = pendingWebViewState;
+        pendingWebViewState = null;
+        if (state == null) {
+            documentCoordinator.onPreparationFailed(navigationIdentity);
+            return;
+        }
+        android.webkit.WebBackForwardList restored = webView.restoreState(state);
+        if (restored == null
+                || restored.getCurrentItem() == null
+                || !isAllowed(restored.getCurrentItem().getUrl())) {
+            documentCoordinator.onPreparationFailed(navigationIdentity);
+            return;
+        }
+        documentCoordinator.expect(navigationIdentity, restored.getCurrentItem().getUrl());
+        updateBackButton();
     }
 
     @Override
@@ -625,6 +666,7 @@ public final class MainActivity extends Activity implements
         if (readinessCoordinator == null) {
             return;
         }
+        cancelNativeNavigationPreparation();
         long navigationIdentity = readinessCoordinator.onMainFrameLoadRequested();
         documentCoordinator.expect(navigationIdentity, url);
     }
@@ -655,6 +697,33 @@ public final class MainActivity extends Activity implements
             return;
         }
         documentCoordinator.onTlsError(view.getUrl());
+    }
+
+    private void prepareNativeNavigation(long navigationIdentity, String destination) {
+        long preparation = ++nativeNavigationPreparation;
+        String currentUrl = webView.getUrl();
+        if (currentUrl == null || "about:blank".equals(currentUrl)) {
+            documentCoordinator.expect(navigationIdentity, destination);
+            webView.loadUrl(destination);
+            return;
+        }
+        webView.evaluateJavascript(CURRENT_DOCUMENT_EPOCH_QUERY, javascriptResult -> {
+            if (preparation != nativeNavigationPreparation) {
+                return;
+            }
+            String baselineEpoch = CurrentDocumentObservation.parseEpoch(javascriptResult);
+            if (baselineEpoch.isEmpty()) {
+                documentCoordinator.onPreparationFailed(navigationIdentity);
+                return;
+            }
+            documentCoordinator.expectReplacing(
+                    navigationIdentity, destination, baselineEpoch);
+            webView.loadUrl(destination);
+        });
+    }
+
+    private void cancelNativeNavigationPreparation() {
+        nativeNavigationPreparation++;
     }
 
     @Override

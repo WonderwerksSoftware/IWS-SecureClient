@@ -13,12 +13,18 @@ final class MainFrameNavigationGuard {
     private long startedIdentity;
     private String startedUrl;
     private String loadedDocumentUrl;
+    private String replacementBaselineEpoch;
 
     void expect(long navigationIdentity, String url) {
+        expectReplacing(navigationIdentity, url, null);
+    }
+
+    void expectReplacing(long navigationIdentity, String url, String baselineEpoch) {
         expectedIdentity = navigationIdentity;
         expectedUrl = url;
         startedIdentity = NONE;
         startedUrl = null;
+        replacementBaselineEpoch = baselineEpoch;
     }
 
     boolean expects(String url) {
@@ -43,15 +49,32 @@ final class MainFrameNavigationGuard {
     }
 
     boolean acceptsObservation(
-            long navigationIdentity, String observedUrl, String currentUrl) {
+            long navigationIdentity,
+            String observedUrl,
+            String observedEpoch,
+            String currentUrl) {
+        return acceptsEpoch(navigationIdentity, observedEpoch, currentUrl)
+                && same(observedUrl, startedUrl);
+    }
+
+    boolean acceptsEpoch(
+            long navigationIdentity, String observedEpoch, String currentUrl) {
+        return isCurrentPending(navigationIdentity, currentUrl)
+                && observedEpoch != null
+                && !observedEpoch.isEmpty()
+                && (replacementBaselineEpoch == null
+                    || !replacementBaselineEpoch.equals(observedEpoch));
+    }
+
+    boolean isCurrentPending(long navigationIdentity, String currentUrl) {
         return navigationIdentity != NONE
                 && navigationIdentity == startedIdentity
-                && same(observedUrl, startedUrl)
                 && same(currentUrl, startedUrl);
     }
 
-    void complete(long navigationIdentity, String observedUrl) {
-        if (navigationIdentity != startedIdentity || !same(observedUrl, startedUrl)) {
+    void complete(long navigationIdentity, String observedUrl, String observedEpoch) {
+        if (!acceptsObservation(
+                navigationIdentity, observedUrl, observedEpoch, startedUrl)) {
             return;
         }
         loadedDocumentUrl = observedUrl;
@@ -79,6 +102,7 @@ final class MainFrameNavigationGuard {
         expectedUrl = null;
         startedIdentity = NONE;
         startedUrl = null;
+        replacementBaselineEpoch = null;
     }
 
     private static boolean same(String left, String right) {
