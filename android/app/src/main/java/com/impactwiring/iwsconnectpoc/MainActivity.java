@@ -11,7 +11,10 @@ import android.net.VpnService;
 import android.net.http.SslError;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
+import android.os.SystemClock;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -32,7 +35,8 @@ import android.widget.TextView;
 import android.widget.Toast;
 import java.io.ByteArrayInputStream;
 
-public final class MainActivity extends Activity implements IwsVpnService.Observer {
+public final class MainActivity extends Activity implements
+        IwsVpnService.Observer, PortalReadinessCoordinator.Driver {
     private static final int VPN_PERMISSION_REQUEST = 4101;
 
     private WebView webView;
@@ -46,8 +50,11 @@ public final class MainActivity extends Activity implements IwsVpnService.Observ
     private boolean bound;
     private boolean permissionRequestInFlight;
     private boolean bootstrapEnrollmentInFlight;
-    private boolean portalNeedsReload = true;
     private final PortalLoadRecovery portalLoadRecovery = new PortalLoadRecovery();
+    private final Object readinessCallbackToken = new Object();
+    private Handler readinessHandler;
+    private PortalReadinessCoordinator readinessCoordinator;
+    private PortalProbeRunner probeRunner;
 
     private final ServiceConnection connection = new ServiceConnection() {
         @Override
@@ -74,28 +81,48 @@ public final class MainActivity extends Activity implements IwsVpnService.Observ
         buildShell();
         configurePortalPolicy();
         configureWebView();
+        configureReadiness();
         if (state != null) {
             webView.restoreState(state);
         }
         registerSystemBackHandler();
-        onTransportState(TransportState.CONNECTING);
+        if (readinessCoordinator != null) {
+            showConnectionState("Connecting to IWS…", false);
+        }
     }
 
     @Override
     protected void onStart() {
         super.onStart();
+        if (readinessCoordinator != null) {
+            readinessCoordinator.onStart();
+        }
         bindService(new Intent(this, IwsVpnService.class), connection, Context.BIND_AUTO_CREATE);
     }
 
     @Override
     protected void onStop() {
         CookieManager.getInstance().flush();
+        if (readinessCoordinator != null) {
+            readinessCoordinator.onStop();
+        }
         if (bound) {
             service.setObserver(null);
             unbindService(connection);
             bound = false;
         }
         super.onStop();
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (readinessHandler != null) {
+            readinessHandler.removeCallbacksAndMessages(readinessCallbackToken);
+        }
+        if (probeRunner != null) {
+            probeRunner.close();
+        }
+        super.onDestroy();
     }
 
     @Override
@@ -232,7 +259,7 @@ public final class MainActivity extends Activity implements IwsVpnService.Observ
         statusPane.addView(statusDetail, detailParams);
 
         retryButton = railButton(getString(R.string.iws_retry));
-        retryButton.setOnClickListener(view -> requestVpnPermission());
+        retryButton.setOnClickListener(view -> manualRetry());
         LinearLayout.LayoutParams retryParams =
                 new LinearLayout.LayoutParams(dp(168), dp(48));
         retryParams.gravity = Gravity.CENTER_HORIZONTAL;
@@ -260,6 +287,24 @@ public final class MainActivity extends Activity implements IwsVpnService.Observ
         } catch (IllegalArgumentException error) {
             portalPolicy = null;
             showConnectionState("This IWS build has no valid portal configured.", false);
+        }
+    }
+
+    private void configureReadiness() {
+        if (portalPolicy == null) {
+            return;
+        }
+        try {
+            readinessHandler = new Handler(Looper.getMainLooper());
+            probeRunner = new PortalProbeRunner(new PortalHealthProbe(
+                    portalPolicy.portalRoot(),
+                    new AppVpnDnsReadiness(
+                            getApplicationContext(), BuildConfig.ALLOWED_ENDPOINT_IPV4)));
+            readinessCoordinator = new PortalReadinessCoordinator(
+                    SystemClock::elapsedRealtime, this);
+        } catch (IllegalArgumentException error) {
+            portalPolicy = null;
+            showConnectionState("This IWS build has no valid HTTPS portal configured.", false);
         }
     }
 
@@ -313,8 +358,9 @@ public final class MainActivity extends Activity implements IwsVpnService.Observ
             @Override
             public void onPageFinished(WebView view, String url) {
                 if (portalLoadRecovery.mayRevealPortal(isAllowed(url))) {
-                    portalNeedsReload = false;
-                    statusPane.setVisibility(View.GONE);
+                    if (readinessCoordinator != null) {
+                        readinessCoordinator.onMainFrameSucceeded();
+                    }
                 }
                 updateBackButton();
             }
@@ -324,8 +370,13 @@ public final class MainActivity extends Activity implements IwsVpnService.Observ
                     WebView view, WebResourceRequest request, WebResourceError error) {
                 if (request.isForMainFrame()) {
                     portalLoadRecovery.onMainFrameLoadFailed();
-                    portalNeedsReload = true;
-                    showConnectionState("IWS could not load the portal.", true);
+                    PortalReadinessResult failure = error.getErrorCode()
+                            == WebViewClient.ERROR_FAILED_SSL_HANDSHAKE
+                            ? PortalReadinessResult.FATAL_TLS
+                            : PortalReadinessResult.RETRYABLE;
+                    if (readinessCoordinator != null) {
+                        readinessCoordinator.onMainFrameFailed(failure);
+                    }
                 }
             }
 
@@ -336,8 +387,10 @@ public final class MainActivity extends Activity implements IwsVpnService.Observ
                     WebResourceResponse response) {
                 if (request.isForMainFrame() && response.getStatusCode() >= 400) {
                     portalLoadRecovery.onMainFrameLoadFailed();
-                    portalNeedsReload = true;
-                    showConnectionState("IWS portal returned an error.", true);
+                    if (readinessCoordinator != null) {
+                        readinessCoordinator.onMainFrameFailed(
+                                PortalHealthProbe.classifyStatus(response.getStatusCode()));
+                    }
                 }
             }
 
@@ -346,8 +399,9 @@ public final class MainActivity extends Activity implements IwsVpnService.Observ
                     WebView view, SslErrorHandler handler, SslError error) {
                 handler.cancel();
                 portalLoadRecovery.onMainFrameLoadFailed();
-                portalNeedsReload = true;
-                showConnectionState("IWS could not verify the portal connection.", true);
+                if (readinessCoordinator != null) {
+                    readinessCoordinator.onMainFrameFailed(PortalReadinessResult.FATAL_TLS);
+                }
             }
         });
     }
@@ -365,7 +419,7 @@ public final class MainActivity extends Activity implements IwsVpnService.Observ
             return;
         }
         if (service.transportState() == TransportState.CONNECTED) {
-            openPortalRoot();
+            readinessCoordinator.onTransportConnected();
             return;
         }
         Intent permissionIntent = VpnService.prepare(this);
@@ -421,13 +475,21 @@ public final class MainActivity extends Activity implements IwsVpnService.Observ
     }
 
     private void openPortalRoot() {
-        if (!bound || service.transportState() != TransportState.CONNECTED) {
-            requestVpnPermission();
+        if (readinessCoordinator == null) {
             return;
         }
-        portalNeedsReload = true;
-        portalLoadRecovery.onMainFrameLoadRequested();
-        webView.loadUrl(portalPolicy.portalRoot());
+        readinessCoordinator.onPortalRootRequested();
+        if (!bound || service.transportState() != TransportState.CONNECTED) {
+            requestVpnPermission();
+        }
+    }
+
+    private void manualRetry() {
+        if (readinessCoordinator == null) {
+            return;
+        }
+        readinessCoordinator.onManualRetry();
+        requestVpnPermission();
     }
 
     private void navigateBack() {
@@ -463,23 +525,81 @@ public final class MainActivity extends Activity implements IwsVpnService.Observ
     @Override
     public void onTransportState(TransportState state) {
         runOnUiThread(() -> {
-            PortalUiState uiState = PortalUiState.from(state);
-            if (!uiState.mayLoadPortal) {
-                portalNeedsReload = true;
-                webView.stopLoading();
-                showConnectionState(
-                        uiState.employeeMessage, uiState.employeeDetail, uiState.showRetry);
+            if (readinessCoordinator == null) {
                 return;
             }
-            if (!portalLoadRecovery.shouldKeepErrorPanelVisible()) {
-                statusPane.setVisibility(View.GONE);
-            }
-            String currentUrl = webView.getUrl();
-            if (portalNeedsReload || currentUrl == null || !isAllowed(currentUrl)) {
-                portalLoadRecovery.onMainFrameLoadRequested();
-                webView.loadUrl(portalPolicy.portalRoot());
+            switch (state) {
+                case CONNECTED:
+                    readinessCoordinator.onTransportConnected();
+                    break;
+                case CONNECTING:
+                case DISCONNECTING:
+                    readinessCoordinator.onTransportConnecting();
+                    break;
+                case ERROR:
+                case DISCONNECTED:
+                default:
+                    readinessCoordinator.onTransportDisconnected();
+                    break;
             }
         });
+    }
+
+    @Override
+    public void showConnecting() {
+        showConnectionState("Connecting to IWS…", false);
+    }
+
+    @Override
+    public void showUnavailable(boolean tlsFailure) {
+        if (tlsFailure) {
+            showConnectionState("IWS could not verify the portal connection.", true);
+        } else {
+            showConnectionState(
+                    "IWS is unavailable.", "Check your connection and try again.", true);
+        }
+    }
+
+    @Override
+    public void revealPortal() {
+        statusPane.setVisibility(View.GONE);
+    }
+
+    @Override
+    public void navigateToPortalRoot() {
+        portalLoadRecovery.onMainFrameLoadRequested();
+        webView.loadUrl(portalPolicy.portalRoot());
+    }
+
+    @Override
+    public boolean startProbe(long episode, long remainingMillis) {
+        return probeRunner.start(episode, remainingMillis, (completedEpisode, result) ->
+                readinessHandler.post(() -> readinessCoordinator.onProbeCompleted(
+                        completedEpisode, result)));
+    }
+
+    @Override
+    public void scheduleRetry(long episode, long delayMillis) {
+        postReadinessCallback(
+                () -> readinessCoordinator.onRetryDue(episode), delayMillis);
+    }
+
+    @Override
+    public void scheduleDeadline(long episode, long delayMillis) {
+        postReadinessCallback(
+                () -> readinessCoordinator.onDeadline(episode), delayMillis);
+    }
+
+    @Override
+    public void cancelScheduledWork() {
+        readinessHandler.removeCallbacksAndMessages(readinessCallbackToken);
+    }
+
+    private void postReadinessCallback(Runnable callback, long delayMillis) {
+        readinessHandler.postAtTime(
+                callback,
+                readinessCallbackToken,
+                SystemClock.uptimeMillis() + delayMillis);
     }
 
     @Override
