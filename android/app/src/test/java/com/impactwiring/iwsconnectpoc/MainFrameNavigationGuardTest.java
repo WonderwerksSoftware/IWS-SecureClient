@@ -1,41 +1,40 @@
 package com.impactwiring.iwsconnectpoc;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
 public final class MainFrameNavigationGuardTest {
     @Test
-    public void staleCallbackUrlCannotBorrowNewerNavigationIdentity() {
-        MainFrameNavigationGuard guard = new MainFrameNavigationGuard();
-        guard.expect(1L, "https://portal.iws.example/build");
-        guard.onStarted(
-                "https://portal.iws.example/build",
+    public void capturedOldObservationCannotSatisfyNewerNavigation() {
+        MainFrameNavigationGuard guard = started(
+                1L, "https://portal.iws.example/build");
+        long oldIdentity = guard.pendingIdentityForCurrentUrl(
                 "https://portal.iws.example/build");
         guard.expect(2L, "https://portal.iws.example/inventory");
         guard.onStarted(
                 "https://portal.iws.example/inventory",
                 "https://portal.iws.example/inventory");
 
-        assertEquals(MainFrameNavigationGuard.NONE, guard.identityForCallback(
+        assertFalse(guard.acceptsObservation(
+                oldIdentity,
                 "https://portal.iws.example/build",
-                "https://portal.iws.example/inventory"));
-        assertEquals(2L, guard.identityForCallback(
-                "https://portal.iws.example/inventory",
                 "https://portal.iws.example/inventory"));
     }
 
     @Test
-    public void invalidationRejectsDelayedCallbackEvenWhenUrlStillMatches() {
-        MainFrameNavigationGuard guard = new MainFrameNavigationGuard();
-        guard.expect(4L, "https://portal.iws.example/build");
-        guard.onStarted(
-                "https://portal.iws.example/build",
+    public void invalidationRejectsDelayedDocumentObservation() {
+        MainFrameNavigationGuard guard = started(
+                4L, "https://portal.iws.example/build");
+        long capturedIdentity = guard.pendingIdentityForCurrentUrl(
                 "https://portal.iws.example/build");
 
-        guard.invalidate();
+        guard.invalidatePending();
 
-        assertEquals(MainFrameNavigationGuard.NONE, guard.identityForCallback(
+        assertFalse(guard.acceptsObservation(
+                capturedIdentity,
                 "https://portal.iws.example/build",
                 "https://portal.iws.example/build"));
     }
@@ -49,56 +48,81 @@ public final class MainFrameNavigationGuardTest {
                 "https://portal.iws.example/build",
                 "https://portal.iws.example/inventory");
 
-        assertEquals(MainFrameNavigationGuard.NONE, guard.identityForCallback(
-                "https://portal.iws.example/build",
-                "https://portal.iws.example/inventory"));
+        assertEquals(MainFrameNavigationGuard.NONE,
+                guard.pendingIdentityForCurrentUrl(
+                        "https://portal.iws.example/inventory"));
     }
 
     @Test
     public void equivalentRootAndDefaultPortRepresentationsKeepTheirIdentity() {
         MainFrameNavigationGuard guard = new MainFrameNavigationGuard();
         guard.expect(9L, "https://PORTAL.iws.example:443");
-
         guard.onStarted(
                 "https://portal.iws.example/",
                 "https://portal.iws.example/");
 
-        assertEquals(9L, guard.identityForCallback(
-                "https://portal.iws.example/",
+        assertEquals(9L, guard.pendingIdentityForCurrentUrl(
                 "https://portal.iws.example/"));
     }
 
     @Test
-    public void currentDocumentIdentityCoversTlsFailureFromItsSubresources() {
-        MainFrameNavigationGuard guard = new MainFrameNavigationGuard();
-        guard.expect(11L, "https://portal.iws.example/build");
-        guard.onStarted(
-                "https://portal.iws.example/build",
-                "https://portal.iws.example/build");
-
-        assertEquals(11L, guard.identityForCurrentDocument(
-                "https://portal.iws.example/build"));
-        assertEquals(MainFrameNavigationGuard.NONE, guard.identityForCurrentDocument(
-                "https://portal.iws.example/inventory"));
-    }
-
-    @Test
-    public void sameUrlReplacementSwallowsRetiredCompletionBeforeAcceptingNewOne() {
-        MainFrameNavigationGuard guard = new MainFrameNavigationGuard();
-        guard.expect(20L, "https://portal.iws.example/");
-        guard.onStarted(
-                "https://portal.iws.example/",
-                "https://portal.iws.example/");
+    public void healthySameUrlReplacementNeedsOnlyCurrentDocumentObservation() {
+        MainFrameNavigationGuard guard = started(
+                20L, "https://portal.iws.example/");
+        guard.invalidatePending();
         guard.expect(21L, "https://portal.iws.example/");
         guard.onStarted(
                 "https://portal.iws.example/",
                 "https://portal.iws.example/");
+        long replacementIdentity = guard.pendingIdentityForCurrentUrl(
+                "https://portal.iws.example/");
 
-        assertEquals(MainFrameNavigationGuard.NONE, guard.identityForCallback(
+        assertTrue(guard.acceptsObservation(
+                replacementIdentity,
                 "https://portal.iws.example/",
                 "https://portal.iws.example/"));
-        assertEquals(21L, guard.identityForCallback(
-                "https://portal.iws.example/",
-                "https://portal.iws.example/"));
+    }
+
+    @Test
+    public void currentDocumentObservationMustMatchActualWebViewUrl() {
+        MainFrameNavigationGuard guard = started(
+                30L, "https://portal.iws.example/build");
+        long identity = guard.pendingIdentityForCurrentUrl(
+                "https://portal.iws.example/build");
+
+        assertFalse(guard.acceptsObservation(
+                identity,
+                "https://portal.iws.example/build",
+                "https://portal.iws.example/inventory"));
+    }
+
+    @Test
+    public void loadedDocumentKeepsTlsStateAfterNavigationCompletes() {
+        MainFrameNavigationGuard guard = started(
+                50L, "https://portal.iws.example/build");
+        guard.complete(50L, "https://portal.iws.example/build");
+
+        assertTrue(guard.hasCurrentDocument("https://portal.iws.example/build"));
+        assertEquals(MainFrameNavigationGuard.NONE,
+                guard.pendingIdentityForCurrentUrl(
+                        "https://portal.iws.example/build"));
+    }
+
+    @Test
+    public void reconnectInvalidatesPendingButRetainsLoadedDocumentTlsState() {
+        MainFrameNavigationGuard guard = started(
+                60L, "https://portal.iws.example/build");
+        guard.complete(60L, "https://portal.iws.example/build");
+
+        guard.invalidatePending();
+
+        assertTrue(guard.hasCurrentDocument("https://portal.iws.example/build"));
+    }
+
+    private static MainFrameNavigationGuard started(long identity, String url) {
+        MainFrameNavigationGuard guard = new MainFrameNavigationGuard();
+        guard.expect(identity, url);
+        guard.onStarted(url, url);
+        return guard;
     }
 }

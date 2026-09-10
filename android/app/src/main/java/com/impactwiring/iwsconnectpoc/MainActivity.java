@@ -38,6 +38,13 @@ import java.io.ByteArrayInputStream;
 public final class MainActivity extends Activity implements
         IwsVpnService.Observer, PortalReadinessCoordinator.Driver {
     private static final int VPN_PERMISSION_REQUEST = 4101;
+    private static final String CURRENT_DOCUMENT_QUERY =
+            "(function(){"
+            + "if(document.readyState!=='complete')return 'L';"
+            + "var s=-1;try{var e=performance.getEntriesByType('navigation')[0];"
+            + "if(e&&typeof e.responseStatus==='number')s=e.responseStatus;}catch(_e){}"
+            + "return 'C|'+s+'|'+encodeURIComponent(String(location.href));"
+            + "})()";
 
     private WebView webView;
     private Button backButton;
@@ -50,11 +57,10 @@ public final class MainActivity extends Activity implements
     private boolean bound;
     private boolean permissionRequestInFlight;
     private boolean bootstrapEnrollmentInFlight;
-    private final PortalLoadRecovery portalLoadRecovery = new PortalLoadRecovery();
-    private final MainFrameNavigationGuard navigationGuard = new MainFrameNavigationGuard();
     private final Object readinessCallbackToken = new Object();
     private Handler readinessHandler;
     private PortalReadinessCoordinator readinessCoordinator;
+    private PortalDocumentCoordinator documentCoordinator;
     private PortalProbeRunner probeRunner;
 
     private final ServiceConnection connection = new ServiceConnection() {
@@ -111,6 +117,9 @@ public final class MainActivity extends Activity implements
         }
         if (readinessCoordinator != null) {
             readinessCoordinator.onStop();
+        }
+        if (documentCoordinator != null) {
+            documentCoordinator.invalidatePending();
         }
         if (bound) {
             service.setObserver(null);
@@ -308,6 +317,7 @@ public final class MainActivity extends Activity implements
                             getApplicationContext(), BuildConfig.ALLOWED_ENDPOINT_IPV4)));
             readinessCoordinator = new PortalReadinessCoordinator(
                     SystemClock::elapsedRealtime, this);
+            documentCoordinator = new PortalDocumentCoordinator(readinessCoordinator);
         } catch (IllegalArgumentException error) {
             portalPolicy = null;
             showConnectionState("This IWS build has no valid HTTPS portal configured.", false);
@@ -339,7 +349,6 @@ public final class MainActivity extends Activity implements
                 if (blocked) {
                     showConnectionState("That destination is outside IWS.", true);
                 } else {
-                    portalLoadRecovery.onMainFrameLoadRequested();
                     trackMainFrameRequest(request.getUrl().toString());
                 }
                 return blocked;
@@ -358,28 +367,22 @@ public final class MainActivity extends Activity implements
 
             @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
-                portalLoadRecovery.onMainFrameLoadStarted();
                 String currentUrl = view.getUrl();
                 if (readinessCoordinator != null
                         && isAllowed(url)
                         && url.equals(currentUrl)
-                        && !navigationGuard.expects(url)) {
+                        && !documentCoordinator.expects(url)) {
                     trackMainFrameRequest(url);
                 }
-                navigationGuard.onStarted(url, currentUrl);
+                if (documentCoordinator != null) {
+                    documentCoordinator.onStarted(url, currentUrl);
+                }
                 updateBackButton();
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
-                long navigationIdentity = navigationGuard.identityForCallback(url, view.getUrl());
-                if (navigationIdentity != MainFrameNavigationGuard.NONE
-                        && portalLoadRecovery.mayRevealPortal(isAllowed(url))) {
-                    navigationGuard.complete(navigationIdentity);
-                    if (readinessCoordinator != null) {
-                        readinessCoordinator.onMainFrameSucceeded(navigationIdentity);
-                    }
-                }
+                observeCurrentDocument();
                 updateBackButton();
             }
 
@@ -387,20 +390,11 @@ public final class MainActivity extends Activity implements
             public void onReceivedError(
                     WebView view, WebResourceRequest request, WebResourceError error) {
                 if (request.isForMainFrame()) {
-                    long navigationIdentity = navigationGuard.identityForCallback(
-                            request.getUrl().toString(), view.getUrl());
-                    if (navigationIdentity == MainFrameNavigationGuard.NONE) {
+                    if (error.getErrorCode() == WebViewClient.ERROR_FAILED_SSL_HANDSHAKE) {
+                        latchCurrentDocumentTlsFailure(view);
                         return;
                     }
-                    portalLoadRecovery.onMainFrameLoadFailed();
-                    navigationGuard.complete(navigationIdentity);
-                    PortalReadinessResult failure = error.getErrorCode()
-                            == WebViewClient.ERROR_FAILED_SSL_HANDSHAKE
-                            ? PortalReadinessResult.FATAL_TLS
-                            : PortalReadinessResult.RETRYABLE;
-                    if (readinessCoordinator != null) {
-                        readinessCoordinator.onMainFrameFailed(navigationIdentity, failure);
-                    }
+                    observeCurrentDocument();
                 }
             }
 
@@ -410,18 +404,7 @@ public final class MainActivity extends Activity implements
                     WebResourceRequest request,
                     WebResourceResponse response) {
                 if (request.isForMainFrame() && response.getStatusCode() >= 400) {
-                    long navigationIdentity = navigationGuard.identityForCallback(
-                            request.getUrl().toString(), view.getUrl());
-                    if (navigationIdentity == MainFrameNavigationGuard.NONE) {
-                        return;
-                    }
-                    portalLoadRecovery.onMainFrameLoadFailed();
-                    navigationGuard.complete(navigationIdentity);
-                    if (readinessCoordinator != null) {
-                        readinessCoordinator.onMainFrameFailed(
-                                navigationIdentity,
-                                PortalHealthProbe.classifyStatus(response.getStatusCode()));
-                    }
+                    observeCurrentDocument();
                 }
             }
 
@@ -429,17 +412,7 @@ public final class MainActivity extends Activity implements
             public void onReceivedSslError(
                     WebView view, SslErrorHandler handler, SslError error) {
                 handler.cancel();
-                long navigationIdentity =
-                        navigationGuard.identityForCurrentDocument(view.getUrl());
-                if (navigationIdentity == MainFrameNavigationGuard.NONE) {
-                    return;
-                }
-                portalLoadRecovery.onMainFrameLoadFailed();
-                navigationGuard.complete(navigationIdentity);
-                if (readinessCoordinator != null) {
-                    readinessCoordinator.onMainFrameFailed(
-                            navigationIdentity, PortalReadinessResult.FATAL_TLS);
-                }
+                latchCurrentDocumentTlsFailure(view);
             }
         });
     }
@@ -516,7 +489,7 @@ public final class MainActivity extends Activity implements
         if (readinessCoordinator == null) {
             return;
         }
-        navigationGuard.invalidate();
+        documentCoordinator.invalidatePending();
         readinessCoordinator.onPortalRootRequested();
         if (!bound || service.transportState() != TransportState.CONNECTED) {
             requestVpnPermission();
@@ -527,14 +500,13 @@ public final class MainActivity extends Activity implements
         if (readinessCoordinator == null) {
             return;
         }
-        navigationGuard.invalidate();
+        documentCoordinator.invalidatePending();
         readinessCoordinator.onManualRetry();
         requestVpnPermission();
     }
 
     private void navigateBack() {
         if (webView.canGoBack()) {
-            portalLoadRecovery.onMainFrameLoadRequested();
             android.webkit.WebBackForwardList history = webView.copyBackForwardList();
             int targetIndex = history.getCurrentIndex() - 1;
             if (targetIndex >= 0) {
@@ -579,13 +551,13 @@ public final class MainActivity extends Activity implements
                     break;
                 case CONNECTING:
                 case DISCONNECTING:
-                    navigationGuard.invalidate();
+                    documentCoordinator.invalidatePending();
                     readinessCoordinator.onTransportConnecting();
                     break;
                 case ERROR:
                 case DISCONNECTED:
                 default:
-                    navigationGuard.invalidate();
+                    documentCoordinator.invalidatePending();
                     readinessCoordinator.onTransportDisconnected();
                     break;
             }
@@ -614,8 +586,7 @@ public final class MainActivity extends Activity implements
 
     @Override
     public void navigateToPortalRoot(long navigationIdentity) {
-        navigationGuard.expect(navigationIdentity, portalPolicy.portalRoot());
-        portalLoadRecovery.onMainFrameLoadRequested();
+        documentCoordinator.expect(navigationIdentity, portalPolicy.portalRoot());
         webView.loadUrl(portalPolicy.portalRoot());
     }
 
@@ -655,7 +626,35 @@ public final class MainActivity extends Activity implements
             return;
         }
         long navigationIdentity = readinessCoordinator.onMainFrameLoadRequested();
-        navigationGuard.expect(navigationIdentity, url);
+        documentCoordinator.expect(navigationIdentity, url);
+    }
+
+    private void observeCurrentDocument() {
+        String currentUrl = webView.getUrl();
+        long navigationIdentity = documentCoordinator.pendingIdentityForCurrentUrl(currentUrl);
+        if (navigationIdentity == MainFrameNavigationGuard.NONE) {
+            return;
+        }
+        webView.evaluateJavascript(CURRENT_DOCUMENT_QUERY, javascriptResult -> {
+            CurrentDocumentObservation observation =
+                    CurrentDocumentObservation.parse(javascriptResult);
+            if (!observation.complete) {
+                return;
+            }
+            String observedCurrentUrl = webView.getUrl();
+            documentCoordinator.onObservation(
+                    navigationIdentity,
+                    observation,
+                    observedCurrentUrl,
+                    isAllowed(observation.url));
+        });
+    }
+
+    private void latchCurrentDocumentTlsFailure(WebView view) {
+        if (documentCoordinator == null) {
+            return;
+        }
+        documentCoordinator.onTlsError(view.getUrl());
     }
 
     @Override

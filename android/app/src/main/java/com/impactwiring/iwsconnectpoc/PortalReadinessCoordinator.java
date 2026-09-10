@@ -66,6 +66,8 @@ final class PortalReadinessCoordinator {
         started = false;
         transportConnected = false;
         invalidateProbeResult();
+        probeInFlight = false;
+        waitingForProbeSlot = false;
         invalidateNavigation();
         cancelEpisode();
     }
@@ -166,6 +168,13 @@ final class PortalReadinessCoordinator {
     long onMainFrameLoadRequested() {
         expectedNavigationIdentity = ++navigationIdentitySequence;
         return expectedNavigationIdentity;
+    }
+
+    void onDocumentTlsFailure() {
+        if (!started) {
+            return;
+        }
+        failEpisode(true);
     }
 
     void onRetryDue(long retryEpisode) {

@@ -4,26 +4,21 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.Locale;
 
-/** Associates WebView main-frame callbacks with an explicitly observed live navigation. */
+/** Tracks pending navigation separately from the last successfully loaded document. */
 final class MainFrameNavigationGuard {
     static final long NONE = 0L;
 
     private long expectedIdentity;
     private String expectedUrl;
-    private long activeIdentity;
-    private String activeUrl;
-    private String retiredUrl;
-    private long pendingStartedIdentity;
-    private String pendingStartedUrl;
+    private long startedIdentity;
+    private String startedUrl;
+    private String loadedDocumentUrl;
 
     void expect(long navigationIdentity, String url) {
-        retireActiveNavigation();
         expectedIdentity = navigationIdentity;
         expectedUrl = url;
-        activeIdentity = NONE;
-        activeUrl = null;
-        pendingStartedIdentity = NONE;
-        pendingStartedUrl = null;
+        startedIdentity = NONE;
+        startedUrl = null;
     }
 
     boolean expects(String url) {
@@ -36,69 +31,54 @@ final class MainFrameNavigationGuard {
                 || !same(startedUrl, currentUrl)) {
             return;
         }
-        if (retiredUrl != null && same(startedUrl, retiredUrl)) {
-            pendingStartedIdentity = expectedIdentity;
-            pendingStartedUrl = startedUrl;
+        startedIdentity = expectedIdentity;
+        this.startedUrl = startedUrl;
+    }
+
+    long pendingIdentityForCurrentUrl(String currentUrl) {
+        if (startedIdentity == NONE || !same(currentUrl, startedUrl)) {
+            return NONE;
+        }
+        return startedIdentity;
+    }
+
+    boolean acceptsObservation(
+            long navigationIdentity, String observedUrl, String currentUrl) {
+        return navigationIdentity != NONE
+                && navigationIdentity == startedIdentity
+                && same(observedUrl, startedUrl)
+                && same(currentUrl, startedUrl);
+    }
+
+    void complete(long navigationIdentity, String observedUrl) {
+        if (navigationIdentity != startedIdentity || !same(observedUrl, startedUrl)) {
             return;
         }
-        activeIdentity = expectedIdentity;
-        activeUrl = startedUrl;
+        loadedDocumentUrl = observedUrl;
+        clearPending();
     }
 
-    long identityForCallback(String callbackUrl, String currentUrl) {
-        if (retiredUrl != null && same(callbackUrl, retiredUrl)) {
-            retiredUrl = null;
-            if (pendingStartedIdentity != NONE && same(pendingStartedUrl, currentUrl)) {
-                activeIdentity = pendingStartedIdentity;
-                activeUrl = pendingStartedUrl;
-            }
-            pendingStartedIdentity = NONE;
-            pendingStartedUrl = null;
-            return NONE;
-        }
-        if (activeIdentity == NONE
-                || !same(callbackUrl, activeUrl)
-                || !same(callbackUrl, currentUrl)) {
-            return NONE;
-        }
-        return activeIdentity;
-    }
-
-    long identityForCurrentDocument(String currentUrl) {
-        if (pendingStartedIdentity != NONE && same(currentUrl, pendingStartedUrl)) {
-            return pendingStartedIdentity;
-        }
-        if (activeIdentity == NONE || !same(currentUrl, activeUrl)) {
-            return NONE;
-        }
-        return activeIdentity;
-    }
-
-    void complete(long navigationIdentity) {
-        if (navigationIdentity == activeIdentity || navigationIdentity == pendingStartedIdentity) {
-            expectedIdentity = NONE;
-            expectedUrl = null;
-            activeIdentity = NONE;
-            activeUrl = null;
-            pendingStartedIdentity = NONE;
-            pendingStartedUrl = null;
+    void fail(long navigationIdentity) {
+        if (navigationIdentity == startedIdentity) {
+            clearPending();
         }
     }
 
-    void invalidate() {
-        retireActiveNavigation();
+    void invalidatePending() {
+        clearPending();
+    }
+
+    boolean hasCurrentDocument(String currentUrl) {
+        return same(currentUrl, loadedDocumentUrl)
+                || same(currentUrl, startedUrl)
+                || same(currentUrl, expectedUrl);
+    }
+
+    private void clearPending() {
         expectedIdentity = NONE;
         expectedUrl = null;
-        activeIdentity = NONE;
-        activeUrl = null;
-        pendingStartedIdentity = NONE;
-        pendingStartedUrl = null;
-    }
-
-    private void retireActiveNavigation() {
-        if (activeIdentity != NONE) {
-            retiredUrl = activeUrl;
-        }
+        startedIdentity = NONE;
+        startedUrl = null;
     }
 
     private static boolean same(String left, String right) {

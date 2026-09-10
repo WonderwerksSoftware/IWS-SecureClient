@@ -77,6 +77,33 @@ public final class PortalReadinessCoordinatorTest {
     }
 
     @Test
+    public void sameOwnerCanProbeAfterBackgroundCompletionWasDetached() {
+        Fixture fixture = new Fixture();
+        fixture.coordinator.onTransportConnected();
+        assertEquals(1, fixture.driver.probes.size());
+
+        fixture.coordinator.onStop();
+        fixture.coordinator.onStart();
+        fixture.coordinator.onTransportConnected();
+
+        assertEquals(2, fixture.driver.probes.size());
+    }
+
+    @Test
+    public void removedQueuedCompletionCannotBlockManualRetryAfterResume() {
+        Fixture fixture = new Fixture();
+        fixture.coordinator.onTransportConnected();
+        assertEquals(1, fixture.driver.probes.size());
+
+        fixture.coordinator.onStop();
+        fixture.coordinator.onStart();
+        fixture.coordinator.onManualRetry();
+        fixture.coordinator.onTransportConnected();
+
+        assertEquals(2, fixture.driver.probes.size());
+    }
+
+    @Test
     public void duplicateConnectedCallbackDoesNotResetBudgetOrStartAnotherProbe() {
         Fixture fixture = new Fixture();
         fixture.coordinator.onTransportConnected();
@@ -231,6 +258,32 @@ public final class PortalReadinessCoordinatorTest {
         assertTrue(fixture.driver.lastUnavailableWasTls);
         assertEquals(1, fixture.driver.probes.size());
         assertFalse(fixture.driver.connectingVisible);
+    }
+
+    @Test
+    public void loadedDocumentTlsFailureLatchesFatalAfterNavigationCompleted() {
+        Fixture fixture = loadedWorkflow();
+
+        fixture.coordinator.onDocumentTlsFailure();
+        fixture.coordinator.onTransportConnecting();
+        fixture.coordinator.onTransportConnected();
+
+        assertTrue(fixture.driver.lastUnavailableWasTls);
+        assertEquals(1, fixture.driver.probes.size());
+    }
+
+    @Test
+    public void loadedDocumentTlsFailureLatchesFatalAfterOrdinaryReconnect() {
+        Fixture fixture = loadedWorkflow();
+        fixture.coordinator.onTransportDisconnected();
+        fixture.coordinator.onTransportConnected();
+        long reconnectProbe = fixture.driver.lastProbeEpisode();
+        fixture.coordinator.onProbeCompleted(reconnectProbe, PortalReadinessResult.READY);
+
+        fixture.coordinator.onDocumentTlsFailure();
+
+        assertTrue(fixture.driver.lastUnavailableWasTls);
+        assertEquals(1, fixture.driver.tlsUnavailableCount);
     }
 
     @Test
