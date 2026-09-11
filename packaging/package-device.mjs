@@ -5,6 +5,7 @@ import {chmod, copyFile, lstat, mkdir, mkdtemp, readFile, readdir, rm, stat} fro
 import path from "node:path";
 import {spawn} from "node:child_process";
 import {packageWindowsDevice} from "./windows/package-device.mjs";
+import {packageLinuxDevice} from "./linux/package-device.mjs";
 
 async function sha256File(file) {
   const digest = createHash("sha256");
@@ -121,7 +122,9 @@ async function main() {
       })
     : request.platform === "ANDROID"
       ? await runAndroid(request)
-      : (() => { throw new Error("PACKAGE_PLATFORM_INVALID"); })();
+      : ["LINUX_DEBIAN", "LINUX_FEDORA"].includes(request.platform)
+        ? await packageLinuxDevice(request, process.env.IWS_LINUX_TRANSPORT_FILE ?? "", process.env.IWS_LINUX_RPMBUILD_FILE || undefined)
+        : (() => { throw new Error("PACKAGE_PLATFORM_INVALID"); })();
   process.stdout.write(JSON.stringify({...result, sizeBytes: result.sizeBytes.toString()}) + "\n");
 }
 
