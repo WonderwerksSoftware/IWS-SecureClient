@@ -174,11 +174,9 @@ def launch():
     if uid < 1000:
         raise ValueError('IWS_LAUNCH_USER_INVALID')
     user = pwd.getpwuid(uid)
-    # Fixed executable selection, never caller-provided command or URL.
-    browser = next((p for p in ('/usr/bin/google-chrome-stable', '/usr/bin/google-chrome',
-                               '/usr/bin/chromium-browser', '/usr/bin/chromium') if Path(p).is_file()), None)
-    if browser is None:
-        raise ValueError('IWS_BROWSER_UNAVAILABLE')
+    shell = LIB / 'shell.py'
+    if not shell.is_file():
+        raise ValueError('IWS_SHELL_UNAVAILABLE')
     display = {k: os.environ[k] for k in ('DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY') if k in os.environ}
     run('systemctl', 'start', 'iws-client.service')
     enter_namespace(browser=True)
@@ -197,9 +195,12 @@ def launch():
         '-t', 'C,,', '-i', str(CA))
     environment = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8', 'HOME': str(home),
                    'USER': user.pw_name, 'LOGNAME': user.pw_name,
-                   'XDG_RUNTIME_DIR': f'/run/user/{uid}', **display}
+                   'XDG_RUNTIME_DIR': f'/run/user/{uid}',
+                   'IWS_NAMESPACE_INODE': str(os.stat('/proc/self/ns/net').st_ino), **display}
+    os.execve('/usr/bin/python3', ['/usr/bin/python3', '-I', str(shell)], environment)
+
+def wait_for_portal():
     # Private resolver and native CA validation; no hosts override or HTTP fallback.
-    print('Connecting to IWS...', flush=True)
     deadline = time.monotonic() + 45
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, *args, **kwargs):
@@ -217,9 +218,6 @@ def launch():
         if time.monotonic() >= deadline:
             raise ValueError('IWS_UNAVAILABLE')
         time.sleep(min(1, deadline-time.monotonic()))
-    argv = [browser, '--user-data-dir=' + str(home / 'profile'), '--no-first-run',
-            '--no-default-browser-check', '--app=' + PORTAL]
-    os.execve(browser, argv, environment)
 
 if __name__ == '__main__':
     try:

@@ -32,6 +32,15 @@ class NamespaceBoundary(unittest.TestCase):
                            '--max-time', '3', '-sS', '-o', '/dev/null',
                            'https://1.1.1.1/')
             self.assertEqual(negative.returncode, 28, negative.stderr)
+            # The kernel WireGuard transport has no userspace socket UID. Its
+            # pinned privileged mark must not be forgeable by the browser UID.
+            forged = run('ip', 'netns', 'exec', NS, 'setpriv', '--reuid=65534',
+                         '--regid=65534', '--clear-groups', 'python3', '-c',
+                         'import socket,errno; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)\n'
+                         'try: s.setsockopt(socket.SOL_SOCKET,36,0x1bd00)\n'
+                         'except OSError as e: raise SystemExit(0 if e.errno==errno.EPERM else 2)\n'
+                         'raise SystemExit(1)')
+            self.assertEqual(forged.returncode, 0, 'browser UID can forge transport mark')
             self.assertEqual(json.loads(run('ip', '-j', '-4', 'route', 'show', 'table', 'main').stdout),
                              json.loads(before))
             self.assertEqual(Path('/etc/resolv.conf').read_bytes(), dns_before)

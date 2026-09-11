@@ -89,6 +89,7 @@ def prepare():
  chain output {{ type filter hook output priority -150; policy drop;
   meta nfproto ipv6 drop
   meta skuid 0 accept
+  meta nfproto ipv4 oifname {{ "lo", "iwsuplink" }} meta mark 0x1bd00 udp sport 51820 accept
   oifname "IwsPrivate" ip daddr {ENDPOINT} tcp dport {{ 443, 53 }} accept
   oifname "IwsPrivate" ip daddr {ENDPOINT} udp dport 53 accept
  }}
