@@ -7,7 +7,7 @@ test("client-version.json exposes the production candidate with historical accep
   assert.deepEqual(version, {
     schemaVersion: 1,
     release: "0.1.0-production-rc1",
-    releaseTag: "secure-client-private-https-rc1-20260909",
+    releaseTag: "secure-client-linux-v1-candidate-20260911",
     android: {
       packageIdentity: "com.impactwiring.iwsconnectpoc",
       versionCode: 2,
