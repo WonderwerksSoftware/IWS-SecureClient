@@ -81,12 +81,15 @@ def enter_namespace(browser=False):
         if Path(target).exists():
             run('mount', '--bind', '/dev/null', target)
 
+def service_flags(enrolled):
+    return ['--disable-profiles', '--disable-networks'] + (['--disable-update-settings'] if enrolled else [])
+
 def serve():
     if hashlib.sha256((LIB / 'iws-transport').read_bytes()).hexdigest() != TRANSPORT_HASH:
         raise ValueError('IWS_TRANSPORT_CHECKSUM_INVALID')
     enter_namespace()
-    args = transport_args() + ['service', 'run', '--disable-profiles', '--disable-update-settings',
-                               '--disable-networks']
+    args = transport_args() + ['service', 'run'] + service_flags(
+        (STATE / 'device.json').is_file() and not (STATE / 'enrolling').exists())
     os.execve(args[0], args, clean_environment())
 
 def install_trust(platform):
@@ -130,8 +133,9 @@ def install():
             return
         if not key.is_file() or key.is_symlink() or key.stat().st_mode & 0o077:
             raise ValueError('IWS_BOOTSTRAP_INVALID')
+        run('systemctl', 'daemon-reload')
+        run('systemctl', 'stop', 'iws-client.service')
         if action == 'replace':
-            run('systemctl', 'stop', 'iws-client.service')
             # Only the separately provisioned IWS peer's own state is replaced.
             transport = STATE / 'transport'
             if transport.is_symlink():
@@ -139,7 +143,7 @@ def install():
             if transport.exists():
                 shutil.rmtree(transport)
         (STATE / 'transport').mkdir(mode=0o700, exist_ok=True)
-        run('systemctl', 'daemon-reload')
+        (STATE / 'enrolling').touch(mode=0o600)
         run('systemctl', 'enable', '--now', 'iws-client.service')
         deadline = time.monotonic() + 15
         while not (RUN / 'transport.sock').exists():
@@ -155,10 +159,15 @@ def install():
         run(*args, timeout=120, env=clean_environment())
         record.write_text(json.dumps(incoming))
         record.chmod(0o600)
+        (STATE / 'enrolling').unlink()
+        # Installation/re-provision only, before launching a browser: apply the
+        # same post-enrollment settings lock as the accepted Windows controller.
+        run('systemctl', 'restart', 'iws-client.service')
         print('IWS setup completed. Run iws to open IWS.')
     finally:
         key.unlink(missing_ok=True)
         manifest_path.unlink(missing_ok=True)
+        (STATE / 'enrolling').unlink(missing_ok=True)
 
 def launch():
     uid = int(os.environ.get('SUDO_UID', '-1'))

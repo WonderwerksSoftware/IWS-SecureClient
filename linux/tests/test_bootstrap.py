@@ -39,5 +39,10 @@ class Bootstrap(unittest.TestCase):
             with self.assertRaises(ValueError):
                 runtime.generation_action(old, new)
 
+    def test_first_enrollment_is_not_blocked_by_the_post_enrollment_settings_lock(self):
+        runtime = self.load()
+        self.assertNotIn('--disable-update-settings', runtime.service_flags(enrolled=False))
+        self.assertIn('--disable-update-settings', runtime.service_flags(enrolled=True))
+
 if __name__ == '__main__':
     unittest.main()
