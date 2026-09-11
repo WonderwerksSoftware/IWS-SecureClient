@@ -31,7 +31,14 @@ export async function packageLinuxDevice(request, transportFile, rpmBuilder = "/
     async function file(relative, bytes, mode = 0o644) {
       const target = path.join(tree, relative);
       await mkdir(path.dirname(target), {recursive: true, mode: 0o755});
+      // Build jobs run under umask 0077. Native package payload permissions
+      // must nevertheless be explicit, especially existing /usr directories.
+      for (let directory = path.dirname(target); ; directory = path.dirname(directory)) {
+        await chmod(directory, 0o755);
+        if (directory === tree) break;
+      }
       await writeFile(target, bytes, {mode});
+      await chmod(target, mode);
     }
     async function source(from, to, mode = 0o644) {
       const full = path.join(request.checkpointPath, from);

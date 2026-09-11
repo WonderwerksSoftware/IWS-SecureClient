@@ -75,6 +75,8 @@ def prepare():
         nss = re.sub(r'^hosts:.*$', 'hosts: files dns', Path('/etc/nsswitch.conf').read_text(), flags=re.M)
         (STATE / 'nsswitch.conf').write_text(nss)
         (STATE / 'nsswitch.conf').chmod(0o444)
+        (STATE / 'browser-hosts').write_text('127.0.0.1 localhost\n')
+        (STATE / 'browser-hosts').chmod(0o444)
         command('ip', 'netns', 'add', NAME)
         created = True
         command('ip', '-n', NAME, 'link', 'set', 'lo', 'up')
@@ -128,7 +130,7 @@ def prepare():
             if DNS.exists():
                 DNS.rmdir()
             (STATE / 'owned').unlink()
-            for filename in ('control-resolv.conf', 'browser-resolv.conf', 'nsswitch.conf'):
+            for filename in ('control-resolv.conf', 'browser-resolv.conf', 'nsswitch.conf', 'browser-hosts'):
                 (STATE / filename).unlink(missing_ok=True)
             STATE.rmdir()
         raise
@@ -152,7 +154,7 @@ def remove():
         (DNS / filename).unlink(missing_ok=True)
     if DNS.exists():
         DNS.rmdir()
-    for filename in ('uplink.pid', 'uplink.log', 'owned', 'control-resolv.conf', 'browser-resolv.conf', 'nsswitch.conf'):
+    for filename in ('uplink.pid', 'uplink.log', 'owned', 'control-resolv.conf', 'browser-resolv.conf', 'nsswitch.conf', 'browser-hosts'):
         (STATE / filename).unlink(missing_ok=True)
     STATE.rmdir()
     print('IWS_NAMESPACE_REMOVED')

@@ -73,6 +73,8 @@ def enter_namespace(browser=False):
     resolver = RUN / ('browser-resolv.conf' if browser else 'control-resolv.conf')
     run('mount', '--bind', str(resolver), '/etc/resolv.conf')
     run('mount', '--bind', str(RUN / 'nsswitch.conf'), '/etc/nsswitch.conf')
+    if browser:
+        run('mount', '--bind', str(RUN / 'browser-hosts'), '/etc/hosts')
     # Filesystem Unix sockets are not isolated by a network namespace.
     # Do not let the private transport/browser configure host services over D-Bus.
     for target in ('/run/dbus/system_bus_socket', '/run/systemd/resolve/io.systemd.Resolve'):
@@ -190,9 +192,12 @@ def launch():
     # Private resolver and native CA validation; no hosts override or HTTP fallback.
     print('Connecting to IWS...', flush=True)
     deadline = time.monotonic() + 45
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *args, **kwargs):
+            return None
     while True:
         try:
-            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
             with opener.open(PORTAL + 'api/health', timeout=min(5, max(0.1, deadline-time.monotonic()))) as response:
                 if response.status == 200:
                     break
