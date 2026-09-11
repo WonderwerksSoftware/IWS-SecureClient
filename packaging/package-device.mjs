@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import {createHash} from "node:crypto";
 import {createReadStream} from "node:fs";
-import {lstat, readFile, readdir, stat} from "node:fs/promises";
+import {chmod, copyFile, lstat, mkdir, mkdtemp, readFile, readdir, rm, stat} from "node:fs/promises";
 import path from "node:path";
 import {spawn} from "node:child_process";
 import {packageWindowsDevice} from "./windows/package-device.mjs";
@@ -29,42 +29,84 @@ async function loadRequest(file) {
 
 async function runAndroid(request) {
   if (!request.signerReference) throw new Error("ANDROID_SIGNER_REQUIRED");
-  const builder = path.join(request.checkpointPath, "scripts", "build-android-device.sh");
-  await new Promise((resolve, reject) => {
-    const child = spawn(builder, [], {
-      cwd: request.checkpointPath,
-      stdio: "ignore",
-      env: {
-        PATH: "/usr/bin:/bin",
-        LANG: "C.UTF-8",
-        LC_ALL: "C.UTF-8",
-        TMPDIR: request.outputDirectory,
-        IWS_DEVICE_MANIFEST_FILE: request.manifestPath,
-        IWS_SETUP_KEY_FILE: request.setupKeyPath,
-        IWS_OUTPUT_DIR: request.outputDirectory,
-        IWS_SIGNER_PROPERTIES: request.signerReference,
-        IWS_EXPECTED_SIGNER_SHA256: process.env.IWS_ANDROID_SIGNER_FINGERPRINT ?? "",
-        IWS_PROVEN_AAR_FILE: process.env.IWS_ANDROID_PROVEN_AAR ?? "",
-        IWS_PROVEN_AAR_SHA256: process.env.IWS_ANDROID_PROVEN_AAR_SHA256 ?? ""
-      }
+  const toolchainRoot = process.env.IWS_ANDROID_TOOLCHAIN_ROOT;
+  if (!toolchainRoot || !path.isAbsolute(toolchainRoot)) throw new Error("ANDROID_TOOLCHAIN_REQUIRED");
+  const source = await mkdtemp(path.join(request.outputDirectory, ".android-source-"));
+  try {
+    await copyAndroidSource(request.checkpointPath, source);
+    const builder = path.join(source, "scripts", "build-android-device.sh");
+    await new Promise((resolve, reject) => {
+      const child = spawn(builder, [], {
+        cwd: source,
+        stdio: "ignore",
+        env: {
+          PATH: "/usr/bin:/bin",
+          LANG: "C.UTF-8",
+          LC_ALL: "C.UTF-8",
+          TMPDIR: request.outputDirectory,
+          IWS_CLEANROOM_ROOT: toolchainRoot,
+          IWS_DEVICE_MANIFEST_FILE: request.manifestPath,
+          IWS_SETUP_KEY_FILE: request.setupKeyPath,
+          IWS_OUTPUT_DIR: request.outputDirectory,
+          IWS_SIGNER_PROPERTIES: request.signerReference,
+          IWS_EXPECTED_SIGNER_SHA256: process.env.IWS_ANDROID_SIGNER_FINGERPRINT ?? "",
+          IWS_PROVEN_AAR_FILE: process.env.IWS_ANDROID_PROVEN_AAR ?? "",
+          IWS_PROVEN_AAR_SHA256: process.env.IWS_ANDROID_PROVEN_AAR_SHA256 ?? ""
+        }
+      });
+      child.once("error", reject);
+      child.once("exit", code => code === 0 ? resolve() : reject(new Error("ANDROID_BUILD_FAILED")));
     });
-    child.once("error", reject);
-    child.once("exit", code => code === 0 ? resolve() : reject(new Error("ANDROID_BUILD_FAILED")));
-  });
-  const apks = (await readdir(request.outputDirectory)).filter(value => value.endsWith(".apk"));
-  if (apks.length !== 1) throw new Error("ANDROID_OUTPUT_INVALID");
-  const filename = apks[0];
-  const artifactPath = path.join(request.outputDirectory, filename);
-  const info = await stat(artifactPath);
-  return {
-    artifactPath,
-    filename,
-    sizeBytes: BigInt(info.size),
-    sha256: await sha256File(artifactPath),
-    packageIdentity: "com.impactwiring.iwsconnectpoc",
-    clientCheckpoint: request.clientCheckpoint,
-    signer: {kind: "ANDROID", fingerprint: process.env.IWS_ANDROID_SIGNER_FINGERPRINT ?? ""}
-  };
+    const apks = (await readdir(request.outputDirectory)).filter(value => value.endsWith(".apk"));
+    if (apks.length !== 1) throw new Error("ANDROID_OUTPUT_INVALID");
+    const filename = apks[0];
+    const artifactPath = path.join(request.outputDirectory, filename);
+    const info = await stat(artifactPath);
+    return {
+      artifactPath,
+      filename,
+      sizeBytes: BigInt(info.size),
+      sha256: await sha256File(artifactPath),
+      packageIdentity: "com.impactwiring.iwsconnectpoc",
+      clientCheckpoint: request.clientCheckpoint,
+      signer: {kind: "ANDROID", fingerprint: process.env.IWS_ANDROID_SIGNER_FINGERPRINT ?? ""}
+    };
+  } finally {
+    // A failed deletion must prevent successful artifact publication.
+    try { await rm(source, {recursive: true, force: true}); }
+    catch { throw new Error("ANDROID_WORKSPACE_CLEANUP_FAILED"); }
+  }
+}
+
+async function copyAndroidSource(checkpoint, destination) {
+  const inputs = [
+    "android/app/src", "android/app/build.gradle", "android/build.gradle",
+    "android/settings.gradle", "android/gradle.properties", "android/gradlew",
+    "android/gradle/wrapper/gradle-wrapper.jar", "android/gradle/wrapper/gradle-wrapper.properties",
+    "android/gradle/verification-metadata.xml", "config/checkpoint/android-poc.properties",
+    "third_party/netbird/pins.sh", "scripts/build-android-device.sh",
+    "scripts/build-android-poc.sh", "scripts/bootstrap-android-sdk.sh", "scripts/secret-scan.sh"
+  ];
+  async function copy(relative) {
+    const from = path.join(checkpoint, relative);
+    const info = await lstat(from).catch(error => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    });
+    if (!info) return;
+    if (info.isSymbolicLink()) throw new Error("ANDROID_SOURCE_INVALID");
+    const to = path.join(destination, relative);
+    if (info.isDirectory()) {
+      await mkdir(to, {recursive: true, mode: 0o700});
+      for (const entry of await readdir(from)) await copy(path.join(relative, entry));
+    } else if (info.isFile()) {
+      if (/\.(apk|aar|jks|keystore|p12|pfx|log|jsonl)$/i.test(relative)) throw new Error("ANDROID_SOURCE_INVALID");
+      await mkdir(path.dirname(to), {recursive: true, mode: 0o700});
+      await copyFile(from, to);
+      await chmod(to, info.mode & 0o100 ? 0o700 : 0o600);
+    } else throw new Error("ANDROID_SOURCE_INVALID");
+  }
+  for (const input of inputs) await copy(input);
 }
 
 async function main() {

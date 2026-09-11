@@ -33,15 +33,15 @@ foreach ($program in $programs) {
     $programSpecs = @($specs | Where-Object Program -eq $program)
     $allow = @($programSpecs | Where-Object Action -eq "Allow")
     if ($allow.Count -ne 1 -or $allow[0].Protocol -ne "TCP" -or
-        $allow[0].RemoteAddress -ne "100.83.246.85" -or
+        $allow[0].RemoteAddress -ne "100.83.75.124" -or
         @($allow[0].RemotePort) -notcontains "443") {
         throw "approved tuple is not exact"
     }
     $addresses = @($programSpecs.RemoteAddress | Select-Object -Unique)
     foreach ($required in @(
-        "0.0.0.0-100.83.246.84",
-        "100.83.246.85",
-        "100.83.246.86-255.255.255.255",
+        "0.0.0.0-100.83.75.123",
+        "100.83.75.124",
+        "100.83.75.125-255.255.255.255",
         "0:0:0:0:0:0:0:0-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
     )) {
         if ($addresses -notcontains $required) {
@@ -62,7 +62,7 @@ $overlap = @($specs) + [pscustomobject]@{
     Program = $programs[0]
     Action = "Block"
     Protocol = "TCP"
-    RemoteAddress = "100.83.246.85"
+    RemoteAddress = "100.83.75.124"
     RemotePort = @("443")
 }
 $caught = $false

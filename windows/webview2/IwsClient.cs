@@ -31,7 +31,7 @@ namespace ImpactWiring.IwsClient
 
     internal sealed class IwsForm : Form
     {
-        private const string PortalUrl = "http://100.83.246.85:443/";
+        private const string PortalUrl = "https://portal.iws.internal/";
         private const string ServiceName = "IWSPrivateTransport";
         private readonly WebView2 webView;
         private readonly Button backButton;
@@ -603,28 +603,13 @@ namespace ImpactWiring.IwsClient
                 }
             };
             await core.CallDevToolsProtocolMethodAsync("Network.enable", "{}");
-            core.NavigationCompleted += async delegate(object sender, CoreWebView2NavigationCompletedEventArgs args) {
-                if (!args.IsSuccess || !IsApprovedUri(core.Source)) return;
+            core.NavigationCompleted += delegate(object sender, CoreWebView2NavigationCompletedEventArgs args) {
+                if (!args.IsSuccess) {
+                    AppendEvidence("{\"event\":\"navigation-failed\",\"reason\":\"" + args.WebErrorStatus + "\"}");
+                    return;
+                }
+                if (!IsApprovedUri(core.Source)) return;
                 AppendEvidence("{\"event\":\"navigation-ok\"}");
-                string cookieBefore = await core.ExecuteScriptAsync(
-                    "document.cookie.indexOf('iws_poc_cookie=1') >= 0");
-                if (cookieBefore.Contains("true")) {
-                    AppendEvidence("{\"event\":\"cookie-present-before-write\"}");
-                }
-                string cookieWrite = await core.ExecuteScriptAsync(
-                    "document.cookie='iws_poc_cookie=1; Max-Age=86400; path=/; SameSite=Strict';" +
-                    "document.cookie.indexOf('iws_poc_cookie=1') >= 0");
-                if (cookieWrite.Contains("true")) {
-                    AppendEvidence("{\"event\":\"cookie-write-ok\"}");
-                }
-                string apiResult = await core.ExecuteScriptAsync(
-                    "fetch('/api/health',{cache:'no-store'}).then(r=>String(r.status)).catch(()=>\"error\")");
-                if (apiResult.Contains("200")) {
-                    AppendEvidence("{\"event\":\"api-health-200\"}");
-                }
-                string stateResult = await core.ExecuteScriptAsync(
-                    "JSON.stringify({localStorage:localStorage.length,cookieChars:document.cookie.length})");
-                AppendEvidence("{\"event\":\"web-state-counts\",\"result\":" + stateResult + "}");
             };
         }
 
@@ -642,8 +627,8 @@ namespace ImpactWiring.IwsClient
         {
             Uri uri;
             return Uri.TryCreate(value, UriKind.Absolute, out uri) &&
-                uri.Scheme == Uri.UriSchemeHttp &&
-                uri.Host == "100.83.246.85" &&
+                (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == "wss") &&
+                uri.Host == "portal.iws.internal" &&
                 uri.Port == 443 &&
                 string.IsNullOrEmpty(uri.UserInfo);
         }

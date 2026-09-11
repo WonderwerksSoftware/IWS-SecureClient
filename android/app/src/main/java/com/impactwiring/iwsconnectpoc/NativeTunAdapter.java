@@ -20,10 +20,7 @@ final class NativeTunAdapter implements TunAdapter {
             String dns,
             String searchDomains,
             String coreRoutes) throws Exception {
-        if ((dns != null && !dns.isEmpty())
-                || (searchDomains != null && !searchDomains.isEmpty())) {
-            throw new SecurityException("DNS is disabled for the IP-only isolation POC");
-        }
+        String resolver = PrivateDnsPolicy.resolver(dns, searchDomains);
 
         RoutePolicy policy = new RoutePolicy(
                 BuildConfig.EXPECTED_OVERLAY_CIDR,
@@ -37,6 +34,7 @@ final class NativeTunAdapter implements TunAdapter {
                 .setSession("IWS")
                 .addAllowedApplication(BuildConfig.APPLICATION_ID)
                 .addAddress(assigned.address, assigned.prefixLength)
+                .addDnsServer(resolver)
                 .setMtu(Math.toIntExact(mtu))
                 .setBlocking(true);
         for (RoutePolicy.Route route : routes) {

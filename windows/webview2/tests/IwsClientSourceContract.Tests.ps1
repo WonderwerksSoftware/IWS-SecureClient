@@ -9,7 +9,7 @@ if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
 $source = Get-Content -LiteralPath $sourcePath -Raw
 
 foreach ($required in @(
-    "http://100.83.246.85:443/",
+    "https://portal.iws.internal/",
     "CoreWebView2Environment.CreateAsync",
     "SpecialFolder.LocalApplicationData",
     '"IWS", "WebView2"',
@@ -35,13 +35,6 @@ foreach ($required in @(
     "api-response-200",
     "CallDevToolsProtocolMethodAsync",
     "Network.enable",
-    "fetch('/api/health'",
-    "localStorage.length",
-    "document.cookie.length",
-    "iws_poc_cookie",
-    "cookie-present-before-write",
-    "cookie-write-ok",
-    "Max-Age=86400",
     "shell-evidence.jsonl"
 )) {
     if (-not $source.Contains($required)) {
@@ -49,6 +42,10 @@ foreach ($required in @(
     }
 }
 foreach ($prohibited in @(
+    "ProbeNativeIsolationAsync",
+    "iws_poc_cookie",
+    "fetch('/api/health'",
+    "__iwsTlsSocketProof",
     "--app=",
     "netbird-ui",
     "netbird.exe",

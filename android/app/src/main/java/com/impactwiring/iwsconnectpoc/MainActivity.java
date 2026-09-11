@@ -11,7 +11,10 @@ import android.net.VpnService;
 import android.net.http.SslError;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
+import android.os.SystemClock;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -32,8 +35,23 @@ import android.widget.TextView;
 import android.widget.Toast;
 import java.io.ByteArrayInputStream;
 
-public final class MainActivity extends Activity implements IwsVpnService.Observer {
+public final class MainActivity extends Activity implements
+        IwsVpnService.Observer, PortalReadinessCoordinator.Driver {
     private static final int VPN_PERMISSION_REQUEST = 4101;
+    private static final String STATE_HAS_WEBVIEW_HISTORY =
+            "com.impactwiring.iwsconnectpoc.HAS_WEBVIEW_HISTORY";
+    private static final String CURRENT_DOCUMENT_QUERY =
+            "(function(){"
+            + "if(document.readyState!=='complete')return 'L';"
+            + "var s=-1;try{var e=performance.getEntriesByType('navigation')[0];"
+            + "if(e&&typeof e.responseStatus==='number')s=e.responseStatus;}catch(_e){}"
+            + "var o='';try{o=String(performance.timeOrigin);}catch(_e){}"
+            + "return 'C|'+s+'|'+o+'|'+encodeURIComponent(String(location.href));"
+            + "})()";
+    private static final String CURRENT_DOCUMENT_EPOCH_QUERY =
+            "(function(){try{return 'E|'+String(performance.timeOrigin);}"
+            + "catch(_e){return 'U';}"
+            + "})()";
 
     private WebView webView;
     private Button backButton;
@@ -46,7 +64,13 @@ public final class MainActivity extends Activity implements IwsVpnService.Observ
     private boolean bound;
     private boolean permissionRequestInFlight;
     private boolean bootstrapEnrollmentInFlight;
-    private boolean portalNeedsReload = true;
+    private final Object readinessCallbackToken = new Object();
+    private Handler readinessHandler;
+    private PortalReadinessCoordinator readinessCoordinator;
+    private PortalDocumentCoordinator documentCoordinator;
+    private PortalProbeRunner probeRunner;
+    private Bundle pendingWebViewState;
+    private long nativeNavigationPreparation;
 
     private final ServiceConnection connection = new ServiceConnection() {
         @Override
@@ -73,22 +97,43 @@ public final class MainActivity extends Activity implements IwsVpnService.Observ
         buildShell();
         configurePortalPolicy();
         configureWebView();
-        if (state != null) {
-            webView.restoreState(state);
+        configureReadiness();
+        if (state != null
+                && state.getBoolean(STATE_HAS_WEBVIEW_HISTORY, false)
+                && readinessCoordinator != null) {
+            pendingWebViewState = state;
+            readinessCoordinator.onRestoredStatePending();
         }
         registerSystemBackHandler();
-        onTransportState(TransportState.CONNECTING);
+        if (readinessCoordinator != null) {
+            showConnectionState("Connecting to IWS…", false);
+        }
     }
 
     @Override
     protected void onStart() {
         super.onStart();
+        if (readinessCoordinator != null) {
+            readinessCoordinator.onStart();
+            probeRunner.attach(() -> postReadinessCallback(
+                    readinessCoordinator::onProbeSlotAvailable, 0L));
+        }
         bindService(new Intent(this, IwsVpnService.class), connection, Context.BIND_AUTO_CREATE);
     }
 
     @Override
     protected void onStop() {
         CookieManager.getInstance().flush();
+        if (probeRunner != null) {
+            probeRunner.detach();
+        }
+        if (readinessCoordinator != null) {
+            readinessCoordinator.onStop();
+        }
+        if (documentCoordinator != null) {
+            documentCoordinator.invalidatePending();
+        }
+        cancelNativeNavigationPreparation();
         if (bound) {
             service.setObserver(null);
             unbindService(connection);
@@ -98,8 +143,23 @@ public final class MainActivity extends Activity implements IwsVpnService.Observ
     }
 
     @Override
+    protected void onDestroy() {
+        if (readinessHandler != null) {
+            readinessHandler.removeCallbacksAndMessages(readinessCallbackToken);
+        }
+        if (probeRunner != null) {
+            probeRunner.close();
+        }
+        super.onDestroy();
+    }
+
+    @Override
     protected void onSaveInstanceState(Bundle state) {
-        webView.saveState(state);
+        if (pendingWebViewState != null) {
+            state.putAll(pendingWebViewState);
+        } else if (webView.saveState(state) != null) {
+            state.putBoolean(STATE_HAS_WEBVIEW_HISTORY, true);
+        }
         super.onSaveInstanceState(state);
     }
 
@@ -231,7 +291,7 @@ public final class MainActivity extends Activity implements IwsVpnService.Observ
         statusPane.addView(statusDetail, detailParams);
 
         retryButton = railButton(getString(R.string.iws_retry));
-        retryButton.setOnClickListener(view -> requestVpnPermission());
+        retryButton.setOnClickListener(view -> manualRetry());
         LinearLayout.LayoutParams retryParams =
                 new LinearLayout.LayoutParams(dp(168), dp(48));
         retryParams.gravity = Gravity.CENTER_HORIZONTAL;
@@ -262,6 +322,25 @@ public final class MainActivity extends Activity implements IwsVpnService.Observ
         }
     }
 
+    private void configureReadiness() {
+        if (portalPolicy == null) {
+            return;
+        }
+        try {
+            readinessHandler = new Handler(Looper.getMainLooper());
+            probeRunner = new PortalProbeRunner(new PortalHealthProbe(
+                    portalPolicy.portalRoot(),
+                    new AppVpnDnsReadiness(
+                            getApplicationContext(), BuildConfig.ALLOWED_ENDPOINT_IPV4)));
+            readinessCoordinator = new PortalReadinessCoordinator(
+                    SystemClock::elapsedRealtime, this);
+            documentCoordinator = new PortalDocumentCoordinator(readinessCoordinator);
+        } catch (IllegalArgumentException error) {
+            portalPolicy = null;
+            showConnectionState("This IWS build has no valid HTTPS portal configured.", false);
+        }
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     private void configureWebView() {
         WebSettings settings = webView.getSettings();
@@ -286,6 +365,8 @@ public final class MainActivity extends Activity implements IwsVpnService.Observ
                 boolean blocked = !isAllowed(request.getUrl().toString());
                 if (blocked) {
                     showConnectionState("That destination is outside IWS.", true);
+                } else {
+                    trackMainFrameRequest(request.getUrl().toString());
                 }
                 return blocked;
             }
@@ -303,12 +384,22 @@ public final class MainActivity extends Activity implements IwsVpnService.Observ
 
             @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
+                String currentUrl = view.getUrl();
+                if (readinessCoordinator != null
+                        && isAllowed(url)
+                        && url.equals(currentUrl)
+                        && !documentCoordinator.expects(url)) {
+                    trackMainFrameRequest(url);
+                }
+                if (documentCoordinator != null) {
+                    documentCoordinator.onStarted(url, currentUrl);
+                }
                 updateBackButton();
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
-                portalNeedsReload = false;
+                observeCurrentDocument();
                 updateBackButton();
             }
 
@@ -316,8 +407,11 @@ public final class MainActivity extends Activity implements IwsVpnService.Observ
             public void onReceivedError(
                     WebView view, WebResourceRequest request, WebResourceError error) {
                 if (request.isForMainFrame()) {
-                    portalNeedsReload = true;
-                    showConnectionState("IWS could not load the portal.", true);
+                    if (error.getErrorCode() == WebViewClient.ERROR_FAILED_SSL_HANDSHAKE) {
+                        latchCurrentDocumentTlsFailure(view);
+                        return;
+                    }
+                    observeCurrentDocument();
                 }
             }
 
@@ -327,8 +421,7 @@ public final class MainActivity extends Activity implements IwsVpnService.Observ
                     WebResourceRequest request,
                     WebResourceResponse response) {
                 if (request.isForMainFrame() && response.getStatusCode() >= 400) {
-                    portalNeedsReload = true;
-                    showConnectionState("IWS portal returned an error.", true);
+                    observeCurrentDocument();
                 }
             }
 
@@ -336,8 +429,7 @@ public final class MainActivity extends Activity implements IwsVpnService.Observ
             public void onReceivedSslError(
                     WebView view, SslErrorHandler handler, SslError error) {
                 handler.cancel();
-                portalNeedsReload = true;
-                showConnectionState("IWS could not verify the portal connection.", true);
+                latchCurrentDocumentTlsFailure(view);
             }
         });
     }
@@ -355,7 +447,7 @@ public final class MainActivity extends Activity implements IwsVpnService.Observ
             return;
         }
         if (service.transportState() == TransportState.CONNECTED) {
-            openPortalRoot();
+            readinessCoordinator.onTransportConnected();
             return;
         }
         Intent permissionIntent = VpnService.prepare(this);
@@ -411,16 +503,34 @@ public final class MainActivity extends Activity implements IwsVpnService.Observ
     }
 
     private void openPortalRoot() {
-        if (!bound || service.transportState() != TransportState.CONNECTED) {
-            requestVpnPermission();
+        if (readinessCoordinator == null) {
             return;
         }
-        portalNeedsReload = true;
-        webView.loadUrl(portalPolicy.portalRoot());
+        cancelNativeNavigationPreparation();
+        documentCoordinator.invalidatePending();
+        readinessCoordinator.onPortalRootRequested();
+        if (!bound || service.transportState() != TransportState.CONNECTED) {
+            requestVpnPermission();
+        }
+    }
+
+    private void manualRetry() {
+        if (readinessCoordinator == null) {
+            return;
+        }
+        cancelNativeNavigationPreparation();
+        documentCoordinator.invalidatePending();
+        readinessCoordinator.onManualRetry();
+        requestVpnPermission();
     }
 
     private void navigateBack() {
         if (webView.canGoBack()) {
+            android.webkit.WebBackForwardList history = webView.copyBackForwardList();
+            int targetIndex = history.getCurrentIndex() - 1;
+            if (targetIndex >= 0) {
+                trackMainFrameRequest(history.getItemAtIndex(targetIndex).getUrl());
+            }
             webView.goBack();
         }
         updateBackButton();
@@ -451,20 +561,169 @@ public final class MainActivity extends Activity implements IwsVpnService.Observ
     @Override
     public void onTransportState(TransportState state) {
         runOnUiThread(() -> {
-            PortalUiState uiState = PortalUiState.from(state);
-            if (!uiState.mayLoadPortal) {
-                portalNeedsReload = true;
-                webView.stopLoading();
-                showConnectionState(
-                        uiState.employeeMessage, uiState.employeeDetail, uiState.showRetry);
+            if (readinessCoordinator == null) {
                 return;
             }
-            statusPane.setVisibility(View.GONE);
-            String currentUrl = webView.getUrl();
-            if (portalNeedsReload || currentUrl == null || !isAllowed(currentUrl)) {
-                webView.loadUrl(portalPolicy.portalRoot());
+            switch (state) {
+                case CONNECTED:
+                    readinessCoordinator.onTransportConnected();
+                    break;
+                case CONNECTING:
+                case DISCONNECTING:
+                    cancelNativeNavigationPreparation();
+                    documentCoordinator.invalidatePending();
+                    readinessCoordinator.onTransportConnecting();
+                    break;
+                case ERROR:
+                case DISCONNECTED:
+                default:
+                    cancelNativeNavigationPreparation();
+                    documentCoordinator.invalidatePending();
+                    readinessCoordinator.onTransportDisconnected();
+                    break;
             }
         });
+    }
+
+    @Override
+    public void showConnecting() {
+        showConnectionState("Connecting to IWS…", false);
+    }
+
+    @Override
+    public void showUnavailable(boolean tlsFailure) {
+        cancelNativeNavigationPreparation();
+        if (tlsFailure) {
+            showConnectionState("IWS could not verify the portal connection.", true);
+        } else {
+            showConnectionState(
+                    "IWS is unavailable.", "Check your connection and try again.", true);
+        }
+    }
+
+    @Override
+    public void revealPortal() {
+        cancelNativeNavigationPreparation();
+        statusPane.setVisibility(View.GONE);
+    }
+
+    @Override
+    public void navigateToPortalRoot(long navigationIdentity) {
+        prepareNativeNavigation(navigationIdentity, portalPolicy.portalRoot());
+    }
+
+    @Override
+    public void restorePortalState(long navigationIdentity) {
+        Bundle state = pendingWebViewState;
+        pendingWebViewState = null;
+        if (state == null) {
+            documentCoordinator.onPreparationFailed(navigationIdentity);
+            return;
+        }
+        android.webkit.WebBackForwardList restored = webView.restoreState(state);
+        if (restored == null
+                || restored.getCurrentItem() == null
+                || !isAllowed(restored.getCurrentItem().getUrl())) {
+            documentCoordinator.onPreparationFailed(navigationIdentity);
+            return;
+        }
+        documentCoordinator.expect(navigationIdentity, restored.getCurrentItem().getUrl());
+        updateBackButton();
+    }
+
+    @Override
+    public boolean startProbe(long episode, long remainingMillis) {
+        return probeRunner.start(episode, remainingMillis, (completedEpisode, result) ->
+                postReadinessCallback(() -> readinessCoordinator.onProbeCompleted(
+                        completedEpisode, result), 0L));
+    }
+
+    @Override
+    public void scheduleRetry(long episode, long delayMillis) {
+        postReadinessCallback(
+                () -> readinessCoordinator.onRetryDue(episode), delayMillis);
+    }
+
+    @Override
+    public void scheduleDeadline(long episode, long delayMillis) {
+        postReadinessCallback(
+                () -> readinessCoordinator.onDeadline(episode), delayMillis);
+    }
+
+    @Override
+    public void cancelScheduledWork() {
+        readinessHandler.removeCallbacksAndMessages(readinessCallbackToken);
+    }
+
+    private void postReadinessCallback(Runnable callback, long delayMillis) {
+        readinessHandler.postAtTime(
+                callback,
+                readinessCallbackToken,
+                SystemClock.uptimeMillis() + delayMillis);
+    }
+
+    private void trackMainFrameRequest(String url) {
+        if (readinessCoordinator == null) {
+            return;
+        }
+        cancelNativeNavigationPreparation();
+        long navigationIdentity = readinessCoordinator.onMainFrameLoadRequested();
+        documentCoordinator.expect(navigationIdentity, url);
+    }
+
+    private void observeCurrentDocument() {
+        String currentUrl = webView.getUrl();
+        long navigationIdentity = documentCoordinator.pendingIdentityForCurrentUrl(currentUrl);
+        if (navigationIdentity == MainFrameNavigationGuard.NONE) {
+            return;
+        }
+        webView.evaluateJavascript(CURRENT_DOCUMENT_QUERY, javascriptResult -> {
+            CurrentDocumentObservation observation =
+                    CurrentDocumentObservation.parse(javascriptResult);
+            if (!observation.complete) {
+                return;
+            }
+            String observedCurrentUrl = webView.getUrl();
+            documentCoordinator.onObservation(
+                    navigationIdentity,
+                    observation,
+                    observedCurrentUrl,
+                    isAllowed(observation.url));
+        });
+    }
+
+    private void latchCurrentDocumentTlsFailure(WebView view) {
+        if (documentCoordinator == null) {
+            return;
+        }
+        documentCoordinator.onTlsError(view.getUrl());
+    }
+
+    private void prepareNativeNavigation(long navigationIdentity, String destination) {
+        long preparation = ++nativeNavigationPreparation;
+        String currentUrl = webView.getUrl();
+        if (currentUrl == null || "about:blank".equals(currentUrl)) {
+            documentCoordinator.expect(navigationIdentity, destination);
+            webView.loadUrl(destination);
+            return;
+        }
+        webView.evaluateJavascript(CURRENT_DOCUMENT_EPOCH_QUERY, javascriptResult -> {
+            if (preparation != nativeNavigationPreparation) {
+                return;
+            }
+            String baselineEpoch = CurrentDocumentObservation.parseEpoch(javascriptResult);
+            if (baselineEpoch.isEmpty()) {
+                documentCoordinator.onPreparationFailed(navigationIdentity);
+                return;
+            }
+            documentCoordinator.expectReplacing(
+                    navigationIdentity, destination, baselineEpoch);
+            webView.loadUrl(destination);
+        });
+    }
+
+    private void cancelNativeNavigationPreparation() {
+        nativeNavigationPreparation++;
     }
 
     @Override

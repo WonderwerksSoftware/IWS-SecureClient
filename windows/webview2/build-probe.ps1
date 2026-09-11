@@ -111,7 +111,10 @@ if ($LASTEXITCODE -ne 0) {
 foreach ($supportFile in @(
     "IwsWebViewFirewall.psm1",
     "Set-IwsWebViewBoundary.ps1",
-    "Remove-IwsWebViewBoundary.ps1"
+    "Remove-IwsWebViewBoundary.ps1",
+    "Install-IwsProductionTrust.ps1",
+    "iws-production-root-ca.crt",
+    "Remove-IwsWebViewShellPoc.ps1"
 )) {
     $supportPath = Join-Path $PSScriptRoot $supportFile
     if (-not (Test-Path -LiteralPath $supportPath -PathType Leaf)) {

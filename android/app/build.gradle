@@ -13,9 +13,8 @@ def prohibitedCidrs = providers.gradleProperty('iwsProhibitedCidrs').orElse(
         '192.168.0.0/16').get()
 def allowedEndpointIpv4 = providers.gradleProperty('iwsAllowedEndpointIpv4').orElse('').get()
 def allowedEndpointPort = providers.gradleProperty('iwsAllowedEndpointPort').orElse('0').get().toInteger()
-def testEndpointUrl = allowedEndpointIpv4.isEmpty()
-        ? ''
-        : "http://${allowedEndpointIpv4}:${allowedEndpointPort}/"
+// Production readiness is the HTTPS portal navigation; no legacy HTTP probe.
+def testEndpointUrl = ''
 def managementUrl = providers.gradleProperty('iwsManagementUrl')
         .orElse('https://api.netbird.io:443').get()
 def portalUrl = providers.gradleProperty('iwsPortalUrl').orElse('').get()
@@ -29,6 +28,10 @@ if (!deviceBuildPropertiesPath.isEmpty()) {
 def bootstrapSetupKey = deviceBuildProperties.getProperty('iwsBootstrapSetupKey', '')
 def bootstrapHostname = deviceBuildProperties.getProperty('iwsBootstrapHostname', '')
 def signerPropertiesPath = deviceBuildProperties.getProperty('iwsSignerPropertiesFile', '')
+def releaseRequested = gradle.startParameter.taskNames.any { it.toLowerCase().contains('release') }
+if (releaseRequested && signerPropertiesPath.isEmpty()) {
+    throw new GradleException('IWS release builds require explicit signer properties')
+}
 def signerProperties = new Properties()
 if (!signerPropertiesPath.isEmpty()) {
     def signerFile = file(signerPropertiesPath)
@@ -58,8 +61,8 @@ android {
         applicationId 'com.impactwiring.iwsconnectpoc'
         minSdk 26
         targetSdk 36
-        versionCode 1
-        versionName '0.1-poc'
+        versionCode 2
+        versionName '0.1-production-rc1'
         buildConfigField 'String', 'EXPECTED_OVERLAY_CIDR', buildConfigString(expectedOverlay)
         buildConfigField 'String', 'PROHIBITED_CIDRS', buildConfigString(prohibitedCidrs)
         buildConfigField 'String', 'TEST_ENDPOINT_URL', buildConfigString(testEndpointUrl)
@@ -77,6 +80,12 @@ android {
 
     buildTypes {
         debug {
+            if (!signerPropertiesPath.isEmpty()) signingConfig signingConfigs.iwsDevice
+        }
+        release {
+            debuggable false
+            minifyEnabled false
+            shrinkResources false
             if (!signerPropertiesPath.isEmpty()) signingConfig signingConfigs.iwsDevice
         }
     }

@@ -46,6 +46,9 @@ test("Windows payload preparation combines only accepted transport and WebView2 
       ["IwsWebViewFirewall.psm1", "firewall"],
       ["Set-IwsWebViewBoundary.ps1", "set-boundary"],
       ["Remove-IwsWebViewBoundary.ps1", "remove-boundary"],
+      ["Install-IwsProductionTrust.ps1", "trust-installer"],
+      ["iws-production-root-ca.crt", "public-certificate"],
+      ["Remove-IwsWebViewShellPoc.ps1", "shell-remover"],
       ["WebView2Fixed/Microsoft.WebView2.FixedVersionRuntime.152.0.4191.53.x64/msedgewebview2.exe", "MZ-webview"]
     ]) shellManifest += await add(webview, name, value);
     await writeFile(path.join(webview, "BUNDLE-MANIFEST.sha256"), shellManifest);

@@ -45,7 +45,10 @@ for member in \
     WebView2Loader.dll \
     IwsWebViewFirewall.psm1 \
     Set-IwsWebViewBoundary.ps1 \
-    Remove-IwsWebViewBoundary.ps1; do
+    Remove-IwsWebViewBoundary.ps1 \
+    Install-IwsProductionTrust.ps1 \
+    iws-production-root-ca.crt \
+    Remove-IwsWebViewShellPoc.ps1; do
     [ -f "$webview/$member" ] || { echo "IWS WebView2 bundle is incomplete" >&2; exit 1; }
     cp "$webview/$member" "$payload/$member"
 done
