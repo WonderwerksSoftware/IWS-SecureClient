@@ -63,7 +63,7 @@ export async function packageLinuxDevice(request, transportFile, rpmBuilder = "/
     const artifactPath = path.join(request.outputDirectory, filename);
     const post = "/usr/bin/python3 -I /usr/lib/iws-client/runtime.py install";
     if (suffix === "deb") {
-      await file("DEBIAN/control", `Package: iws-secure-client\nVersion: 0.1.0-${request.generation}\nArchitecture: amd64\nMaintainer: IWS\nDescription: Managed private IWS client\nDepends: python3, python3-gi, gir1.2-gtk-3.0, gir1.2-webkit2-4.1, iproute2, nftables, passt, sudo, util-linux, ca-certificates, openssl, libnss3-tools, systemd\n`);
+      await file("DEBIAN/control", `Package: iws-secure-client\nVersion: 1.0.0-${request.generation}\nArchitecture: amd64\nMaintainer: IWS\nDescription: Managed private IWS client\nDepends: python3, python3-gi, gir1.2-gtk-3.0, gir1.2-webkit2-4.1, iproute2, nftables, passt, sudo, util-linux, ca-certificates, openssl, libnss3-tools, systemd\n`);
       await file("DEBIAN/postinst", `#!/bin/sh\nset -eu\n${post}\n`, 0o755);
       await file("DEBIAN/prerm", "#!/bin/sh\nset -eu\nif [ \"$1\" = remove ]; then systemctl stop iws-client.service; systemctl disable iws-client.service; fi\n", 0o755);
       await run("/usr/bin/dpkg-deb", ["--root-owner-group", "--build", tree, artifactPath]);
@@ -72,7 +72,7 @@ export async function packageLinuxDevice(request, transportFile, rpmBuilder = "/
       for (const dir of ["BUILD", "BUILDROOT", "RPMS", "SOURCES", "SPECS", "SRPMS"]) await mkdir(path.join(top, dir), {recursive: true});
       // Paths originate from a private mkdtemp, not from device names or keys.
       const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
-      const spec = `%global __os_install_post %{nil}\nName: iws-secure-client\nVersion: 0.1.0\nRelease: ${request.generation}\nSummary: Managed private IWS client\nLicense: Proprietary AND BSD-3-Clause AND MPL-2.0\nBuildArch: x86_64\nRequires: python3, iproute, nftables, passt, sudo, util-linux, ca-certificates, openssl, nss-tools, systemd, python3-gobject, gtk3, webkit2gtk4.1\n%description\nManaged private IWS client\n%install\nmkdir -p %{buildroot}\ncp -a ${quote(tree)}/. %{buildroot}/\n%post\n${post}\n%preun\nif [ \"$1\" = 0 ]; then systemctl stop iws-client.service; systemctl disable iws-client.service; fi\n%files\n%defattr(-,root,root,-)\n/usr/bin/iws\n/usr/lib/iws-client\n/usr/lib/systemd/system/iws-client.service\n/etc/sudoers.d/iws-client\n/usr/share/iws-client\n/usr/share/doc/iws-secure-client\n`;
+      const spec = `%global __os_install_post %{nil}\nName: iws-secure-client\nVersion: 1.0.0\nRelease: ${request.generation}\nSummary: Managed private IWS client\nLicense: Proprietary AND BSD-3-Clause AND MPL-2.0\nBuildArch: x86_64\nRequires: python3, iproute, nftables, passt, sudo, util-linux, ca-certificates, openssl, nss-tools, systemd, python3-gobject, gtk3, webkit2gtk4.1\n%description\nManaged private IWS client\n%install\nmkdir -p %{buildroot}\ncp -a ${quote(tree)}/. %{buildroot}/\n%post\n${post}\n%preun\nif [ \"$1\" = 0 ]; then systemctl stop iws-client.service; systemctl disable iws-client.service; fi\n%files\n%defattr(-,root,root,-)\n/usr/bin/iws\n/usr/lib/iws-client\n/usr/lib/systemd/system/iws-client.service\n/etc/sudoers.d/iws-client\n/usr/share/iws-client\n/usr/share/doc/iws-secure-client\n`;
       const specPath = path.join(top, "SPECS/iws.spec");
       await writeFile(specPath, spec, {mode: 0o600});
       await run(rpmBuilder, ["-bb", "--define", `_topdir ${top}`, specPath]);
