@@ -53,6 +53,7 @@ try {
     if (-not (Test-IwsAdministrator)) {
         throw "IWS client installation requires Administrator approval."
     }
+    Write-Output "IWS_SETUP_PHASE=TRANSPORT_INSTALLATION"
     if (-not (Test-Path -LiteralPath $setupKeyPath -PathType Leaf)) {
         throw "Protected one-use enrollment material is missing."
     }
@@ -101,10 +102,12 @@ try {
     Start-Service -Name $pins.ServiceName
     (Get-Service -Name $pins.ServiceName).WaitForStatus("Running", [TimeSpan]::FromSeconds(20))
 
+    Write-Output "IWS_SETUP_PHASE=ENROLLMENT"
     $enrollmentArgs = Get-IwsEnrollmentArguments -Payload $payload
     Invoke-IwsNativeSanitized -FilePath $installedTransport -Arguments $enrollmentArgs `
         -FailureMessage "IWS device provisioning failed."
 
+    Write-Output "IWS_SETUP_PHASE=TRANSPORT_READY"
     $lockArgs = Get-IwsServiceLockArguments -StateDir $pins.StateRoot
     Invoke-IwsNativeSanitized -FilePath $installedTransport -Arguments $lockArgs `
         -FailureMessage "IWS transport settings lock failed."
