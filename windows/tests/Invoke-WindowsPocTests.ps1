@@ -32,28 +32,42 @@ New-Item -ItemType Directory -Path $tempRoot | Out-Null
 try {
     $payloadPath = Join-Path $tempRoot "payload.json"
     @{
+        deviceId = "devicea"
+        generation = 2
+        clientCheckpoint = "secure-client-v1.0.1"
+        expiresAt = "2099-09-16T00:00:00Z"
         device_name = "DEVMACHINE-IWS"
         management_server = "https://api.netbird.io:443"
         setup_key_file = "C:\ProgramData\IWS\Provisioning\one-use.key"
-        iws_entrypoint = "http://100.83.246.85:443/"
+        iws_entrypoint = "https://portal.iws.internal/"
     } | ConvertTo-Json | Set-Content -LiteralPath $payloadPath -Encoding UTF8
 
     $payload = Read-IwsPayload -Path $payloadPath
+    Assert-True ($payload.deviceId -eq "devicea") "valid device ID was not preserved"
+    Assert-True ($payload.generation -eq 2) "valid generation was not preserved"
     Assert-True ($payload.device_name -eq "DEVMACHINE-IWS") "valid device name was not preserved"
     Assert-True ($payload.management_server -eq "https://api.netbird.io/") "management URL was not normalized"
-    Assert-True ($payload.iws_entrypoint -eq "http://100.83.246.85:443/") "portal URL was not preserved"
+    Assert-True ($payload.iws_entrypoint -eq "https://portal.iws.internal/") "portal URL was not preserved"
 
     $badManagement = Join-Path $tempRoot "bad-management.json"
     @{
+        deviceId = "devicea"
+        generation = 2
+        clientCheckpoint = "secure-client-v1.0.1"
+        expiresAt = "2099-09-16T00:00:00Z"
         device_name = "DEVMACHINE-IWS"
         management_server = "http://api.netbird.io:443"
         setup_key_file = "C:\ProgramData\IWS\Provisioning\one-use.key"
-        iws_entrypoint = "http://100.83.246.85:443/"
+        iws_entrypoint = "https://portal.iws.internal/"
     } | ConvertTo-Json | Set-Content -LiteralPath $badManagement -Encoding UTF8
     Assert-Throws { Read-IwsPayload -Path $badManagement } "HTTP management URL was accepted"
 
     $badPortal = Join-Path $tempRoot "bad-portal.json"
     @{
+        deviceId = "devicea"
+        generation = 2
+        clientCheckpoint = "secure-client-v1.0.1"
+        expiresAt = "2099-09-16T00:00:00Z"
         device_name = "DEVMACHINE-IWS"
         management_server = "https://api.netbird.io:443"
         setup_key_file = "C:\ProgramData\IWS\Provisioning\one-use.key"
@@ -61,12 +75,29 @@ try {
     } | ConvertTo-Json | Set-Content -LiteralPath $badPortal -Encoding UTF8
     Assert-Throws { Read-IwsPayload -Path $badPortal } "non-HTTP portal URL was accepted"
 
+    $httpPortal = Join-Path $tempRoot "http-portal.json"
+    @{
+        deviceId = "devicea"
+        generation = 2
+        clientCheckpoint = "secure-client-v1.0.1"
+        expiresAt = "2099-09-16T00:00:00Z"
+        device_name = "DEVMACHINE-IWS"
+        management_server = "https://api.netbird.io:443"
+        setup_key_file = "C:\ProgramData\IWS\Provisioning\one-use.key"
+        iws_entrypoint = "http://portal.iws.internal/"
+    } | ConvertTo-Json | Set-Content -LiteralPath $httpPortal -Encoding UTF8
+    Assert-Throws { Read-IwsPayload -Path $httpPortal } "HTTP portal fallback was accepted"
+
     $badName = Join-Path $tempRoot "bad-name.json"
     @{
+        deviceId = "devicea"
+        generation = 2
+        clientCheckpoint = "secure-client-v1.0.1"
+        expiresAt = "2099-09-16T00:00:00Z"
         device_name = "bad name"
         management_server = "https://api.netbird.io:443"
         setup_key_file = "C:\ProgramData\IWS\Provisioning\one-use.key"
-        iws_entrypoint = "http://100.83.246.85:443/"
+        iws_entrypoint = "https://portal.iws.internal/"
     } | ConvertTo-Json | Set-Content -LiteralPath $badName -Encoding UTF8
     Assert-Throws { Read-IwsPayload -Path $badName } "invalid device name was accepted"
 
@@ -124,6 +155,30 @@ try {
         Assert-IwsArtifact -Path $artifactPath -ExpectedSha256 ("0" * 64)
     } "artifact hash mismatch was accepted"
 
+    Assert-True ((Get-IwsNativeIdentityStatusFromOutput `
+        -Output "Daemon status: NeedsLogin`r`n" -ExitCode 1) -eq "NeedsLogin") `
+        "explicit native NeedsLogin was not classified"
+    Assert-True ((Get-IwsNativeIdentityStatusFromOutput `
+        -Output "Management: Disconnected`r`nNetBird IP: 100.64.0.7/16`r`n" -ExitCode 0) -eq "Registered") `
+        "registered offline native identity was not preserved"
+    Assert-True ((Get-IwsNativeIdentityStatusFromOutput `
+        -Output "rpc transport unavailable" -ExitCode 1) -eq "Unknown") `
+        "transient native failure was treated as NeedsLogin"
+    Assert-True (Test-IwsEnrollmentCredentialRejection `
+        -Output "rpc error: PermissionDenied: setup key is expired") `
+        "expired setup key was not safely classified"
+    Assert-True (-not (Test-IwsEnrollmentCredentialRejection `
+        -Output "dial tcp: management timeout")) `
+        "transient enrollment failure was misclassified as key rejection"
+    Assert-True (Test-IwsServiceCommandPathOwned `
+        -CommandLine '"C:\Program Files\IWS\Transport\iws-transport.exe" --service IWSPrivateTransport' `
+        -ExpectedPath 'C:\Program Files\IWS\Transport\iws-transport.exe') `
+        "owned quoted service path was rejected"
+    Assert-True (-not (Test-IwsServiceCommandPathOwned `
+        -CommandLine '"C:\Program Files\NetBird\netbird.exe" service run' `
+        -ExpectedPath 'C:\Program Files\IWS\Transport\iws-transport.exe')) `
+        "unrelated NetBird service path was accepted as IWS-owned"
+
     $nativeOutput = Invoke-IwsNativeSanitized `
         -FilePath "$env:SystemRoot\System32\cmd.exe" `
         -Arguments @("/d", "/c", "echo HARMLESS_STDERR 1>&2 & exit /b 0") `
@@ -165,13 +220,17 @@ try {
     Set-Content -LiteralPath $planKeyPath -Value $sentinel -NoNewline
     $planPayloadPath = Join-Path $tempRoot "plan-payload.json"
     @{
+        deviceId = "devicea"
+        generation = 2
+        clientCheckpoint = "secure-client-v1.0.1"
+        expiresAt = "2099-09-16T00:00:00Z"
         device_name = "DEVMACHINE-IWS"
         management_server = "https://api.netbird.io:443"
         setup_key_file = $planKeyPath
-        iws_entrypoint = "http://100.83.246.85:443/"
+        iws_entrypoint = "https://portal.iws.internal/"
     } | ConvertTo-Json | Set-Content -LiteralPath $planPayloadPath -Encoding UTF8
 
-    $planOutput = (& $installerPath -PayloadPath $planPayloadPath -BundleRoot $bundleRoot -PlanOnly) -join "`n"
+    $planOutput = (& $installerPath -PayloadPath $planPayloadPath -BundleRoot $bundleRoot -Mode Enroll -PlanOnly) -join "`n"
     Assert-True (Test-Path -LiteralPath $planKeyPath -PathType Leaf) "PlanOnly deleted the key file"
     Assert-True ($planOutput.Contains("PLAN install IWS private transport service")) "PlanOnly omitted service installation"
     Assert-True ($planOutput.Contains("PLAN enroll IWS device from protected one-use file")) "PlanOnly omitted enrollment"
@@ -181,16 +240,20 @@ try {
     Set-Content -LiteralPath $liveKeyPath -Value $sentinel -NoNewline
     $livePayloadPath = Join-Path $tempRoot "live-payload.json"
     @{
+        deviceId = "devicea"
+        generation = 2
+        clientCheckpoint = "secure-client-v1.0.1"
+        expiresAt = "2099-09-16T00:00:00Z"
         device_name = "DEVMACHINE-IWS"
         management_server = "https://api.netbird.io:443"
         setup_key_file = $liveKeyPath
-        iws_entrypoint = "http://100.83.246.85:443/"
+        iws_entrypoint = "https://portal.iws.internal/"
     } | ConvertTo-Json | Set-Content -LiteralPath $livePayloadPath -Encoding UTF8
 
     $serviceWasPresent = [bool](Get-Service -Name "IWSPrivateTransport" -ErrorAction SilentlyContinue)
     $liveError = ""
     try {
-        & $installerPath -PayloadPath $livePayloadPath -BundleRoot $bundleRoot
+        & $installerPath -PayloadPath $livePayloadPath -BundleRoot $bundleRoot -Mode Enroll
     }
     catch {
         $liveError = $_.Exception.Message
@@ -204,6 +267,16 @@ try {
     $removePlan = (& $removerPath -PlanOnly) -join "`n"
     Assert-True ($removePlan.Contains("IWSPrivateTransport")) "removal PlanOnly omitted IWS service"
     Assert-True (-not $removePlan.Contains("RemoveIdentity=True")) "removal plan deletes identity by default"
+
+    $uninstallerPath = Join-Path $windowsRoot "Uninstall-IwsClient.ps1"
+    Assert-True (Test-Path -LiteralPath $uninstallerPath -PathType Leaf) "normal uninstaller is missing"
+    $uninstallPlan = (& $uninstallerPath -PlanOnly) -join "`n"
+    foreach ($owned in @("IWSPrivateTransport", "IWS Client Boundary POC", "Program Files\IWS")) {
+        Assert-True ($uninstallPlan.Contains($owned)) "uninstall plan omitted owned component: $owned"
+    }
+    foreach ($unrelated in @("Tailscale", "NetBird")) {
+        Assert-True (-not $uninstallPlan.Contains($unrelated)) "uninstall plan included unrelated component: $unrelated"
+    }
 
     Write-Output "PASS $passed Windows POC contract assertions"
 }

@@ -44,6 +44,28 @@ internal static class IwsSetupDiagnosticsTests {
                 "non-whitelisted child output was accepted");
         }
 
+        IwsSetupFailure failure;
+        Assert(IwsSetupDiagnostics.TryParseFailureMarker(
+            "IWS_SETUP_ERROR=ENROLLMENT_CREDENTIAL_REJECTED", out failure),
+            "credential rejection marker was rejected");
+        Assert(failure == IwsSetupFailure.EnrollmentCredentialRejected,
+            "credential rejection marker was misclassified");
+        Assert(IwsSetupDiagnostics.TryParseFailureMarker(
+            "IWS_SETUP_ERROR=ENROLLMENT_TRANSIENT", out failure),
+            "transient enrollment marker was rejected");
+        Assert(failure == IwsSetupFailure.EnrollmentTransient,
+            "transient enrollment marker was misclassified");
+        Assert(IwsSetupDiagnostics.TryParseFailureMarker(
+            "IWS_SETUP_ERROR=IDENTITY_NEEDS_FRESH_INSTALLER", out failure),
+            "identity replacement guidance marker was rejected");
+        Assert(failure == IwsSetupFailure.IdentityNeedsFreshInstaller,
+            "identity replacement guidance marker was misclassified");
+        foreach (string unsafeError in new[] {
+            null, "", " IWS_SETUP_ERROR=ENROLLMENT_TRANSIENT",
+            "IWS_SETUP_ERROR=ENROLLMENT_TRANSIENT ", "IWS_SETUP_ERROR=one-use-secret-canary"
+        }) Assert(!IwsSetupDiagnostics.TryParseFailureMarker(unsafeError, out failure),
+            "non-whitelisted failure marker was accepted");
+
         var records = new List<string>();
         var diagnostics = new IwsSetupDiagnostics(delegate(string record) { records.Add(record); });
         diagnostics.AcceptChildOutput("setup_key=one-use-secret-canary");
@@ -51,11 +73,16 @@ internal static class IwsSetupDiagnosticsTests {
         diagnostics.AcceptChildOutput("{\"payload\":\"payload-json-canary\"}");
         diagnostics.AcceptChildOutput("System.Exception: arbitrary-exception-canary");
         diagnostics.AcceptChildOutput("IWS_SETUP_PHASE=ENROLLMENT");
+        diagnostics.AcceptChildOutput("IWS_SETUP_ERROR=ENROLLMENT_TRANSIENT");
 
         string joined = String.Join("\n", records.ToArray());
-        Assert(records.Count == 1, "discarded child output reached the safe log sink");
+        Assert(records.Count == 2, "discarded child output reached the safe log sink");
         Assert(joined.Contains("PHASE|ENROLLMENT|IWS-WIN-003"),
             "accepted phase did not produce its fixed safe phase/code record");
+        Assert(joined.Contains("FAILURE|ENROLLMENT_TRANSIENT|IWS-WIN-003"),
+            "accepted safe failure did not produce a fixed record");
+        Assert(diagnostics.CurrentFailure == IwsSetupFailure.EnrollmentTransient,
+            "safe failure state was not retained for retry guidance");
         foreach (string canary in new[] {
             "one-use-secret-canary", "personal-access-token-canary", "payload-json-canary",
             "arbitrary-exception-canary"

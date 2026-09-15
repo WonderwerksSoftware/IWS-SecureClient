@@ -2,9 +2,10 @@
 set -eu
 umask 077
 
-transport=${1:?usage: prepare-payload.sh TRANSPORT_BUNDLE WEBVIEW_BUNDLE OUTPUT_DIR}
-webview=${2:?usage: prepare-payload.sh TRANSPORT_BUNDLE WEBVIEW_BUNDLE OUTPUT_DIR}
-output=${3:?usage: prepare-payload.sh TRANSPORT_BUNDLE WEBVIEW_BUNDLE OUTPUT_DIR}
+transport=${1:?usage: prepare-payload.sh TRANSPORT_BUNDLE WEBVIEW_BUNDLE UNINSTALLER_EXE OUTPUT_DIR}
+webview=${2:?usage: prepare-payload.sh TRANSPORT_BUNDLE WEBVIEW_BUNDLE UNINSTALLER_EXE OUTPUT_DIR}
+uninstaller=${3:?usage: prepare-payload.sh TRANSPORT_BUNDLE WEBVIEW_BUNDLE UNINSTALLER_EXE OUTPUT_DIR}
+output=${4:?usage: prepare-payload.sh TRANSPORT_BUNDLE WEBVIEW_BUNDLE UNINSTALLER_EXE OUTPUT_DIR}
 script_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
 for root in "$transport" "$webview"; do
@@ -14,6 +15,10 @@ for root in "$transport" "$webview"; do
     }
     (cd "$root" && sha256sum -c BUNDLE-MANIFEST.sha256 >/dev/null)
 done
+[ -f "$uninstaller" ] && [ ! -L "$uninstaller" ] || {
+    echo "IWS Windows uninstaller input is invalid" >&2
+    exit 1
+}
 [ ! -e "$output" ] || { echo "IWS Windows payload output already exists" >&2; exit 1; }
 
 parent=$(dirname "$output")
@@ -58,6 +63,10 @@ done
 }
 cp -a "$webview/WebView2Fixed" "$payload/WebView2Fixed"
 cp "$script_root/Install-IwsWebViewShellDevice.ps1" "$payload/Install-IwsWebViewShellDevice.ps1"
+cp "$script_root/../../windows/Backup-IwsClientForCleanReinstall.ps1" "$payload/Backup-IwsClientForCleanReinstall.ps1"
+cp "$script_root/../../windows/Restore-IwsClientAfterFailedClean.ps1" "$payload/Restore-IwsClientAfterFailedClean.ps1"
+cp "$script_root/../../windows/Uninstall-IwsClient.ps1" "$payload/Uninstall-IwsClient.ps1"
+cp "$uninstaller" "$payload/IwsUninstall.exe"
 
 (cd "$payload" && find . -type f ! -name BUNDLE-MANIFEST.sha256 -print0 |
     LC_ALL=C sort -z | xargs -0 sha256sum > BUNDLE-MANIFEST.sha256)

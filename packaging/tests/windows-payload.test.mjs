@@ -20,9 +20,11 @@ test("Windows payload preparation combines only accepted transport and WebView2 
   try {
     const transport = path.join(root, "transport");
     const webview = path.join(root, "webview");
+    const uninstaller = path.join(root, "IwsUninstall.exe");
     const output = path.join(root, "output");
     await mkdir(transport);
     await mkdir(webview);
+    await writeFile(uninstaller, "MZ-uninstaller");
     let transportManifest = "";
     for (const [name, value] of [
       ["iws-transport.exe", "MZ-transport"],
@@ -53,15 +55,19 @@ test("Windows payload preparation combines only accepted transport and WebView2 
     ]) shellManifest += await add(webview, name, value);
     await writeFile(path.join(webview, "BUNDLE-MANIFEST.sha256"), shellManifest);
 
-    const result = spawnSync("sh", [preparer, transport, webview, output], {encoding: "utf8"});
+    const result = spawnSync("sh", [preparer, transport, webview, uninstaller, output], {encoding: "utf8"});
     assert.equal(result.status, 0, result.stderr);
     const members = (await readdir(path.join(output, "windows-payload"), {recursive: true}))
       .map(String).sort();
     for (const required of [
       "Install-IwsPrivateTransport.ps1",
       "Install-IwsWebViewShellDevice.ps1",
+      "Backup-IwsClientForCleanReinstall.ps1",
+      "Restore-IwsClientAfterFailedClean.ps1",
       "IwsClient.exe",
+      "IwsUninstall.exe",
       "IwsPrivateTransport.psm1",
+      "Uninstall-IwsClient.ps1",
       "iws-transport.exe"
     ]) assert.ok(members.includes(required), `missing ${required}`);
     assert.ok(members.some(value => value.endsWith("msedgewebview2.exe")));

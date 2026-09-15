@@ -18,10 +18,19 @@ test("Windows packager creates one authenticated zero-input IWS installer", asyn
     await mkdir(outputDirectory);
     await writeFile(path.join(payload, "Install-IwsPrivateTransport.ps1"), "transport installer");
     await writeFile(path.join(payload, "Install-IwsWebViewShellDevice.ps1"), "shell installer");
+    await writeFile(path.join(payload, "IwsUninstall.exe"), "MZ-uninstaller");
+    await writeFile(path.join(payload, "Uninstall-IwsClient.ps1"), "uninstaller");
     const templatePath = path.join(root, "IWS-Setup-Template.exe");
     await writeFile(templatePath, Buffer.from("MZ-IWS-TEMPLATE"));
     const manifestPath = path.join(root, "device.json");
-    await writeFile(manifestPath, JSON.stringify({deviceId: "d1", generation: 2}));
+    await writeFile(manifestPath, JSON.stringify({
+      deviceId: "d1",
+      generation: 2,
+      platform: "WINDOWS",
+      clientHostname: "iws-d1-g2",
+      clientCheckpoint: "secure-client-v1.0.1",
+      expiresAt: new Date(Date.now() + 86400000).toISOString()
+    }));
     const setupKeyPath = path.join(root, "one-use.key");
     await writeFile(setupKeyPath, "ONE_USE_CANARY");
 
@@ -33,7 +42,7 @@ test("Windows packager creates one authenticated zero-input IWS installer", asyn
         clientHostname: "iws-d1-g2",
         manifestPath,
         setupKeyPath,
-        clientCheckpoint: "secure-client-poc-pass-20260904",
+        clientCheckpoint: "secure-client-v1.0.1",
         checkpointPath,
         outputDirectory
       },
@@ -47,11 +56,46 @@ test("Windows packager creates one authenticated zero-input IWS installer", asyn
     assert.equal(bytes.toString().split("ONE_USE_CANARY").length - 1, 1);
     assert.match(parsed.payload.toString("latin1"), /Install-IwsPrivateTransport[.]ps1/);
     assert.match(parsed.payload.toString("latin1"), /Install-IwsWebViewShellDevice[.]ps1/);
+    assert.match(parsed.payload.toString("latin1"), /IwsUninstall[.]exe/);
+    assert.match(parsed.payload.toString("latin1"), /Uninstall-IwsClient[.]ps1/);
     assert.doesNotMatch(parsed.payload.toString("latin1"), /Launch-IwsPoc|--app=/);
     assert.equal(result.filename, "IWS-Setup-d1-g2.exe");
     assert.equal(result.packageIdentity, "IWS-Setup");
-    assert.equal(result.clientCheckpoint, "secure-client-poc-pass-20260904");
+    assert.equal(result.clientCheckpoint, "secure-client-v1.0.1");
     assert.match(result.sha256, /^[0-9a-f]{64}$/);
+  } finally {
+    await rm(root, {recursive: true, force: true});
+  }
+});
+
+test("Windows packager rejects mismatched or expired enrollment provenance", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "iws-secure-client-windows-invalid-"));
+  try {
+    const checkpointPath = path.join(root, "checkpoint");
+    const payload = path.join(checkpointPath, "windows-payload");
+    const outputDirectory = path.join(root, "output");
+    await mkdir(payload, {recursive: true});
+    await mkdir(outputDirectory);
+    const templatePath = path.join(root, "IWS-Setup-Template.exe");
+    await writeFile(templatePath, Buffer.from("MZ-IWS-TEMPLATE"));
+    const manifestPath = path.join(root, "device.json");
+    const setupKeyPath = path.join(root, "one-use.key");
+    await writeFile(setupKeyPath, "ONE_USE_CANARY");
+    const request = {
+      deviceId: "d1", generation: 2, platform: "WINDOWS", clientHostname: "iws-d1-g2",
+      manifestPath, setupKeyPath, clientCheckpoint: "secure-client-v1.0.1",
+      checkpointPath, outputDirectory
+    };
+
+    await writeFile(manifestPath, JSON.stringify({
+      ...request, deviceId: "different", expiresAt: new Date(Date.now() + 86400000).toISOString()
+    }));
+    await assert.rejects(packageWindowsDevice({request, templatePath}), /WINDOWS_MANIFEST_INVALID/);
+
+    await writeFile(manifestPath, JSON.stringify({
+      ...request, expiresAt: new Date(Date.now() - 60000).toISOString()
+    }));
+    await assert.rejects(packageWindowsDevice({request, templatePath}), /WINDOWS_MANIFEST_EXPIRED/);
   } finally {
     await rm(root, {recursive: true, force: true});
   }

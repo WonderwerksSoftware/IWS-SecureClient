@@ -19,9 +19,11 @@ internal sealed class IwsSetupDiagnostics {
         if (safeLog == null) throw new ArgumentNullException("safeLog");
         this.safeLog = safeLog;
         CurrentPhase = IwsSetupPhase.OverlayArchiveVerification;
+        CurrentFailure = IwsSetupFailure.General;
     }
 
     internal IwsSetupPhase CurrentPhase { get; private set; }
+    internal IwsSetupFailure CurrentFailure { get; private set; }
     internal string SafePhaseName { get { return GetSafePhaseName(CurrentPhase); } }
     internal string SafeCode { get { return GetSafeCode(CurrentPhase); } }
 
@@ -32,7 +34,12 @@ internal sealed class IwsSetupDiagnostics {
 
     internal void AcceptChildOutput(string line) {
         IwsSetupPhase phase;
+        IwsSetupFailure failure;
         if (TryParsePhaseMarker(line, out phase)) SetPhase(phase);
+        else if (TryParseFailureMarker(line, out failure)) {
+            CurrentFailure = failure;
+            safeLog(BuildRecord("FAILURE", GetSafeFailureName(failure), SafeCode));
+        }
     }
 
     internal void RecordFailure() {
@@ -55,6 +62,28 @@ internal sealed class IwsSetupDiagnostics {
                 phase = IwsSetupPhase.FirewallBoundaryInstallation; return true;
             default:
                 phase = IwsSetupPhase.OverlayArchiveVerification; return false;
+        }
+    }
+
+    internal static bool TryParseFailureMarker(string line, out IwsSetupFailure failure) {
+        switch (line) {
+            case "IWS_SETUP_ERROR=ENROLLMENT_CREDENTIAL_REJECTED":
+                failure = IwsSetupFailure.EnrollmentCredentialRejected; return true;
+            case "IWS_SETUP_ERROR=ENROLLMENT_TRANSIENT":
+                failure = IwsSetupFailure.EnrollmentTransient; return true;
+            case "IWS_SETUP_ERROR=IDENTITY_NEEDS_FRESH_INSTALLER":
+                failure = IwsSetupFailure.IdentityNeedsFreshInstaller; return true;
+            default:
+                failure = IwsSetupFailure.General; return false;
+        }
+    }
+
+    private static string GetSafeFailureName(IwsSetupFailure failure) {
+        switch (failure) {
+            case IwsSetupFailure.EnrollmentCredentialRejected: return "ENROLLMENT_CREDENTIAL_REJECTED";
+            case IwsSetupFailure.EnrollmentTransient: return "ENROLLMENT_TRANSIENT";
+            case IwsSetupFailure.IdentityNeedsFreshInstaller: return "IDENTITY_NEEDS_FRESH_INSTALLER";
+            default: return "GENERAL";
         }
     }
 

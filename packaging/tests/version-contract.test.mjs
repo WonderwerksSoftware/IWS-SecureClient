@@ -6,8 +6,8 @@ test("client-version.json exposes the production candidate with historical accep
   const version = JSON.parse(await readFile(new URL("../../client-version.json", import.meta.url), "utf8"));
   assert.deepEqual(version, {
     schemaVersion: 2,
-    release: "1.0.0",
-    releaseTag: "secure-client-v1.0.0",
+    release: "1.0.1",
+    releaseTag: "secure-client-v1.0.1",
     android: {
       packageIdentity: "com.impactwiring.iwsconnectpoc",
       versionCode: 3,
@@ -17,7 +17,7 @@ test("client-version.json exposes the production candidate with historical accep
     },
     windows: {
       packageIdentity: "IWS-Setup",
-      clientVersion: "1.0.0",
+      clientVersion: "1.0.1",
       acceptedCommit: "06151df888320d6f45200aee42e44da162da6b1b",
       acceptedTag: "windows-productization-poc-pass-20260904"
     },
@@ -39,7 +39,7 @@ test("client-version.json exposes the production candidate with historical accep
 test("Node package metadata matches the production candidate release", async () => {
   const packageJson = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8"));
   const packageLock = JSON.parse(await readFile(new URL("../../package-lock.json", import.meta.url), "utf8"));
-  assert.equal(packageJson.version, "1.0.0");
+  assert.equal(packageJson.version, "1.0.1");
   assert.equal(packageLock.version, packageJson.version);
   assert.equal(packageLock.packages[""].version, packageJson.version);
 });

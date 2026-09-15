@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "release": "1.0.0",
-  "releaseTag": "secure-client-v1.0.0",
+  "release": "1.0.1",
+  "releaseTag": "secure-client-v1.0.1",
   "android": {
     "packageIdentity": "com.impactwiring.iwsconnectpoc",
     "versionCode": 3,
@@ -11,7 +11,7 @@
   },
   "windows": {
     "packageIdentity": "IWS-Setup",
-    "clientVersion": "1.0.0",
+    "clientVersion": "1.0.1",
     "acceptedCommit": "06151df888320d6f45200aee42e44da162da6b1b",
     "acceptedTag": "windows-productization-poc-pass-20260904"
   },

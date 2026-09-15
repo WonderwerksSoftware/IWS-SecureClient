@@ -73,12 +73,16 @@ test("package CLI returns one Windows artifact as machine-readable metadata", as
     const manifestPath = path.join(root, "device.json");
     const setupKeyPath = path.join(root, "one-use.key");
     const templatePath = path.join(root, "IWS-Setup-Template.exe");
-    await writeFile(manifestPath, "{}");
+    await writeFile(manifestPath, JSON.stringify({
+      deviceId: "d1", generation: 1, platform: "WINDOWS", clientHostname: "iws-d1-g1",
+      clientCheckpoint: "secure-client-v1.0.1",
+      expiresAt: new Date(Date.now() + 86400000).toISOString()
+    }));
     await writeFile(setupKeyPath, "PRIVATE_CANARY");
     await writeFile(templatePath, "MZ-template");
     const requestFile = await writeRequest(root, {
       deviceId: "d1", generation: 1, platform: "WINDOWS", clientHostname: "iws-d1-g1",
-      manifestPath, setupKeyPath, clientCheckpoint: "secure-client-v1",
+      manifestPath, setupKeyPath, clientCheckpoint: "secure-client-v1.0.1",
       checkpointPath, outputDirectory
     });
 
@@ -87,12 +91,14 @@ test("package CLI returns one Windows artifact as machine-readable metadata", as
       env: {...process.env, IWS_PACKAGE_REQUEST_FILE: requestFile,
         IWS_WINDOWS_TEMPLATE: templatePath, IWS_WINDOWS_PAYLOAD_ROOT: payloadRoot}
     });
+    assert.equal(result.error, undefined);
     assert.equal(result.status, 0, result.stderr);
     assert.doesNotMatch(result.stdout + result.stderr, /PRIVATE_CANARY/);
+    assert.notEqual(result.stdout, "", "package CLI returned no metadata");
     const metadata = JSON.parse(result.stdout);
     assert.equal(metadata.filename, "IWS-Setup-d1-g1.exe");
     assert.equal(metadata.sizeBytes, String((await readFile(metadata.artifactPath)).length));
-    assert.equal(metadata.clientCheckpoint, "secure-client-v1");
+    assert.equal(metadata.clientCheckpoint, "secure-client-v1.0.1");
   } finally {
     await rm(root, {recursive: true, force: true});
   }

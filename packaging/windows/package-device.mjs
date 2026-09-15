@@ -63,12 +63,21 @@ export async function packageWindowsDevice({request, templatePath, payloadRoot =
   if (request.platform !== "WINDOWS") throw new Error("WINDOWS_PLATFORM_INVALID");
   const template = await readFile(templatePath);
   if (template.subarray(0, 2).toString("ascii") !== "MZ") throw new Error("WINDOWS_TEMPLATE_INVALID");
+  const manifest = JSON.parse(await readFile(request.manifestPath, "utf8"));
+  if (!/^[a-z0-9]{1,40}$/.test(request.deviceId) ||
+      !Number.isInteger(request.generation) || request.generation < 1 ||
+      request.clientHostname !== `iws-${request.deviceId}-g${request.generation}` ||
+      ["deviceId", "generation", "platform", "clientHostname", "clientCheckpoint"]
+        .some(name => manifest[name] !== request[name]) ||
+      !Number.isFinite(Date.parse(manifest.expiresAt))) {
+    throw new Error("WINDOWS_MANIFEST_INVALID");
+  }
+  if (Date.parse(manifest.expiresAt) <= Date.now()) throw new Error("WINDOWS_MANIFEST_EXPIRED");
   const staging = await mkdtemp(path.join(request.outputDirectory, ".windows-"));
   const payloadZip = path.join(request.outputDirectory, ".payload.zip");
   try {
     await cp(path.join(payloadRoot, "windows-payload"), staging, {recursive: true});
     await cp(request.setupKeyPath, path.join(staging, "one-use.key"));
-    const manifest = JSON.parse(await readFile(request.manifestPath, "utf8"));
     await writeFile(path.join(staging, "device.json"), JSON.stringify({
       ...manifest,
       device_name: request.clientHostname,
