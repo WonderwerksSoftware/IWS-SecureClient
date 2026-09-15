@@ -20,6 +20,7 @@ internal static class IwsSetupBootstrap {
     private const string TransportPath = @"C:\Program Files\IWS\Transport\iws-transport.exe";
     private const string ClientPath = @"C:\Program Files\IWS\Client\IwsClient.exe";
     private const string ServiceName = "IWSPrivateTransport";
+    private const string EnrollmentEvidenceRoot = @"C:\ProgramData\IWS\EnrollmentEvidence";
 
     [STAThread] private static void Main() {
         string workspace = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
@@ -72,6 +73,7 @@ internal static class IwsSetupBootstrap {
                 IwsSetupAction action = welcome.SelectedAction;
                 bool retryUsed = false;
                 while (true) {
+                    diagnostics.BeginAttempt();
                     try {
                         bool ready = RunInstallation(workspace, deviceJson, manifest, decision, action, diagnostics);
                         using (IwsSetupCompleteForm complete = new IwsSetupCompleteForm(ready)) Application.Run(complete);
@@ -79,7 +81,8 @@ internal static class IwsSetupBootstrap {
                     }
                     catch {
                         try { diagnostics.RecordFailure(); } catch { }
-                        IwsFailureAction failureAction = IwsSetupStateMachine.GetFailureAction(diagnostics.CurrentFailure);
+                        IwsSetupFailure failedAttempt = diagnostics.CurrentFailure;
+                        IwsFailureAction failureAction = IwsSetupStateMachine.GetFailureAction(failedAttempt);
                         string message = BuildFailureMessage(diagnostics, failureAction, retryUsed);
                         if (failureAction == IwsFailureAction.FreshInstaller || retryUsed ||
                             MessageBox.Show(message, "IWS Setup", MessageBoxButtons.RetryCancel,
@@ -100,6 +103,14 @@ internal static class IwsSetupBootstrap {
                             Environment.ExitCode = 1;
                             return;
                         }
+                        if (failedAttempt == IwsSetupFailure.EnrollmentTransient &&
+                            !IwsSetupRecovery.RestoreEnrollmentKeyForRetry(workspace, failedAttempt, decision)) {
+                            MessageBox.Show("The bounded enrollment retry cannot continue with the detected state. " +
+                                "No enrollment material was reused. Request a fresh installer or contact IWS support.",
+                                "IWS Setup", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                            Environment.ExitCode = 1;
+                            return;
+                        }
                     }
                 }
             }
@@ -114,6 +125,8 @@ internal static class IwsSetupBootstrap {
             Environment.ExitCode = 1;
         }
         finally {
+            try { IwsSetupRecovery.DeleteTemporaryEnrollmentKey(workspace); }
+            catch { Environment.ExitCode = 1; }
             try { if (Directory.Exists(workspace)) Directory.Delete(workspace, true); }
             catch { Environment.ExitCode = 1; }
         }
@@ -149,6 +162,11 @@ internal static class IwsSetupBootstrap {
                     "Install-IwsPrivateTransport.ps1", "-PayloadPath", payloadPath,
                     "-BundleRoot", workspace, "-Mode", "Repair", "-PreserveSetupKey");
             }
+            else if (clean) {
+                RunProgressScript(workspace, diagnostics, "Enrolling private connectivity...",
+                    "Install-IwsPrivateTransport.ps1", "-PayloadPath", payloadPath,
+                    "-BundleRoot", workspace, "-Mode", "Enroll", "-CleanRecoveryRoot", recoveryRoot);
+            }
             else {
                 RunProgressScript(workspace, diagnostics, enroll ? "Enrolling private connectivity..." :
                     "Repairing private connectivity...", "Install-IwsPrivateTransport.ps1",
@@ -176,12 +194,17 @@ internal static class IwsSetupBootstrap {
             return enroll || finalEvidence.NativeIdentityStatus == IwsNativeIdentityStatus.Registered;
         }
         catch {
-            if (clean && recoveryRoot != null &&
-                File.Exists(Path.Combine(recoveryRoot, "rollback.ready"))) {
+            if (clean && recoveryRoot != null && diagnostics.EnrollmentEstablished) {
+                // The new identity is now the only local copy of an already-consumed generation.
+                // Leave it active and keep the previous identity recoverable in protected storage.
+            }
+            else if (clean && recoveryRoot != null &&
+                File.Exists(Path.Combine(recoveryRoot, "transaction.started"))) {
                 try {
                     RunProgressScript(workspace, diagnostics, "Restoring the previous IWS installation...",
-                        "Restore-IwsClientAfterFailedClean.ps1", "-BundleRoot", workspace,
-                        "-RecoveryRoot", recoveryRoot);
+                        "Resolve-IwsFailedCleanReinstall.ps1", "-BundleRoot", workspace,
+                        "-RecoveryRoot", recoveryRoot, "-DeviceId", manifest.DeviceId,
+                        "-Generation", manifest.Generation.ToString());
                 }
                 catch { throw new InvalidOperationException(); }
             }
@@ -217,6 +240,16 @@ internal static class IwsSetupBootstrap {
             IwsInstallationReceipt receipt = IwsSetupMetadata.ParseReceipt(File.ReadAllText(ReceiptPath));
             evidence.ReceiptPresent = true; evidence.ReceiptDeviceId = receipt.DeviceId;
             evidence.ReceiptGeneration = receipt.Generation;
+        }
+        string evidencePath = Path.Combine(EnrollmentEvidenceRoot,
+            manifest.DeviceId + "-g" + manifest.Generation + ".json");
+        if (File.Exists(evidencePath)) {
+            try {
+                evidence.ArtifactEnrollmentMaterialUnavailable = IwsSetupMetadata.IsEnrollmentMaterialUnavailable(
+                    File.ReadAllText(evidencePath), manifest.DeviceId, manifest.Generation,
+                    manifest.ClientCheckpoint);
+            }
+            catch { evidence.ArtifactEnrollmentMaterialUnavailable = true; }
         }
         return evidence;
     }
@@ -459,7 +492,9 @@ internal sealed class IwsSetupWelcomeForm : Form {
     }
     private static string Describe(IwsSetupDecision decision) {
         string suffix = decision.ArtifactExpired ?
-            "\r\n\r\nThis installer is expired. It may repair a matching installation, but it cannot enroll or clean reinstall." : "";
+            "\r\n\r\nThis installer is expired. It may repair a matching installation, but it cannot enroll or clean reinstall." :
+            decision.ArtifactEnrollmentMaterialUnavailable ?
+            "\r\n\r\nThis installer's enrollment material was already attempted, established, or rejected. It cannot be reused." : "";
         switch (decision.State) {
             case IwsDetectedState.Fresh: return "Welcome to IWS Setup. Install IWS for this device." + suffix;
             case IwsDetectedState.PartialNeedsLogin: return "IWS private connectivity is present and explicitly needs login. " +

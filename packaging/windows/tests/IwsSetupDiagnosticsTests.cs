@@ -15,6 +15,7 @@ internal static class IwsSetupDiagnosticsTests {
         var expected = new Dictionary<string, IwsSetupPhase> {
             {"IWS_SETUP_PHASE=TRANSPORT_INSTALLATION", IwsSetupPhase.TransportInstallation},
             {"IWS_SETUP_PHASE=ENROLLMENT", IwsSetupPhase.Enrollment},
+            {"IWS_SETUP_PHASE=ENROLLMENT_ESTABLISHED", IwsSetupPhase.EnrollmentEstablished},
             {"IWS_SETUP_PHASE=TRANSPORT_READY", IwsSetupPhase.TransportReady},
             {"IWS_SETUP_PHASE=TRUST_INSTALLATION", IwsSetupPhase.TrustInstallation},
             {"IWS_SETUP_PHASE=WEBVIEW_SHELL_INSTALLATION", IwsSetupPhase.WebViewShellInstallation},
@@ -74,15 +75,21 @@ internal static class IwsSetupDiagnosticsTests {
         diagnostics.AcceptChildOutput("System.Exception: arbitrary-exception-canary");
         diagnostics.AcceptChildOutput("IWS_SETUP_PHASE=ENROLLMENT");
         diagnostics.AcceptChildOutput("IWS_SETUP_ERROR=ENROLLMENT_TRANSIENT");
+        diagnostics.AcceptChildOutput("IWS_SETUP_PHASE=ENROLLMENT_ESTABLISHED");
 
         string joined = String.Join("\n", records.ToArray());
-        Assert(records.Count == 2, "discarded child output reached the safe log sink");
+        Assert(records.Count == 3, "discarded child output reached the safe log sink");
         Assert(joined.Contains("PHASE|ENROLLMENT|IWS-WIN-003"),
             "accepted phase did not produce its fixed safe phase/code record");
         Assert(joined.Contains("FAILURE|ENROLLMENT_TRANSIENT|IWS-WIN-003"),
             "accepted safe failure did not produce a fixed record");
         Assert(diagnostics.CurrentFailure == IwsSetupFailure.EnrollmentTransient,
             "safe failure state was not retained for retry guidance");
+        Assert(diagnostics.EnrollmentEstablished,
+            "established enrollment phase was not retained for clean failure handling");
+        diagnostics.BeginAttempt();
+        Assert(diagnostics.CurrentFailure == IwsSetupFailure.General,
+            "new bounded retry retained the previous attempt failure classification");
         foreach (string canary in new[] {
             "one-use-secret-canary", "personal-access-token-canary", "payload-json-canary",
             "arbitrary-exception-canary"

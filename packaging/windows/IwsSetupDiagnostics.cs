@@ -5,6 +5,7 @@ internal enum IwsSetupPhase {
     OverlayArchiveVerification,
     TransportInstallation,
     Enrollment,
+    EnrollmentEstablished,
     TransportReady,
     TrustInstallation,
     WebViewShellInstallation,
@@ -24,11 +25,15 @@ internal sealed class IwsSetupDiagnostics {
 
     internal IwsSetupPhase CurrentPhase { get; private set; }
     internal IwsSetupFailure CurrentFailure { get; private set; }
+    internal bool EnrollmentEstablished { get; private set; }
+
+    internal void BeginAttempt() { CurrentFailure = IwsSetupFailure.General; }
     internal string SafePhaseName { get { return GetSafePhaseName(CurrentPhase); } }
     internal string SafeCode { get { return GetSafeCode(CurrentPhase); } }
 
     internal void SetPhase(IwsSetupPhase phase) {
         CurrentPhase = phase;
+        if (phase == IwsSetupPhase.EnrollmentEstablished) EnrollmentEstablished = true;
         safeLog(BuildRecord("PHASE", GetSafePhaseName(phase), GetSafeCode(phase)));
     }
 
@@ -52,6 +57,8 @@ internal sealed class IwsSetupDiagnostics {
                 phase = IwsSetupPhase.TransportInstallation; return true;
             case "IWS_SETUP_PHASE=ENROLLMENT":
                 phase = IwsSetupPhase.Enrollment; return true;
+            case "IWS_SETUP_PHASE=ENROLLMENT_ESTABLISHED":
+                phase = IwsSetupPhase.EnrollmentEstablished; return true;
             case "IWS_SETUP_PHASE=TRANSPORT_READY":
                 phase = IwsSetupPhase.TransportReady; return true;
             case "IWS_SETUP_PHASE=TRUST_INSTALLATION":
@@ -92,6 +99,7 @@ internal sealed class IwsSetupDiagnostics {
             case IwsSetupPhase.OverlayArchiveVerification: return "OVERLAY_ARCHIVE_VERIFICATION";
             case IwsSetupPhase.TransportInstallation: return "TRANSPORT_INSTALLATION";
             case IwsSetupPhase.Enrollment: return "ENROLLMENT";
+            case IwsSetupPhase.EnrollmentEstablished: return "ENROLLMENT_ESTABLISHED";
             case IwsSetupPhase.TransportReady: return "TRANSPORT_READY";
             case IwsSetupPhase.TrustInstallation: return "TRUST_INSTALLATION";
             case IwsSetupPhase.WebViewShellInstallation: return "WEBVIEW_SHELL_INSTALLATION";
@@ -106,6 +114,7 @@ internal sealed class IwsSetupDiagnostics {
             case IwsSetupPhase.OverlayArchiveVerification: return "IWS-WIN-001";
             case IwsSetupPhase.TransportInstallation: return "IWS-WIN-002";
             case IwsSetupPhase.Enrollment: return "IWS-WIN-003";
+            case IwsSetupPhase.EnrollmentEstablished: return "IWS-WIN-003";
             case IwsSetupPhase.TransportReady: return "IWS-WIN-004";
             case IwsSetupPhase.TrustInstallation: return "IWS-WIN-005";
             case IwsSetupPhase.WebViewShellInstallation: return "IWS-WIN-006";

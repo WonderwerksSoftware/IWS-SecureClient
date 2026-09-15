@@ -9,7 +9,7 @@ $csc = "$env:SystemRoot\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
   /reference:System.Runtime.Serialization.dll /reference:System.ServiceProcess.dll `
   "/win32manifest:$PSScriptRoot\IwsSetupBootstrap.manifest" "/out:$OutputPath" `
   "$PSScriptRoot\IwsSetupDiagnostics.cs" "$PSScriptRoot\IwsSetupState.cs" `
-  "$PSScriptRoot\IwsSetupMetadata.cs" `
+  "$PSScriptRoot\IwsSetupMetadata.cs" "$PSScriptRoot\IwsSetupRecovery.cs" `
   "$PSScriptRoot\IwsSetupBootstrap.cs"
 if ($LASTEXITCODE -ne 0) { throw "IWS bootstrap compilation failed." }
 & $csc /nologo /target:winexe /platform:x64 /optimize+ `

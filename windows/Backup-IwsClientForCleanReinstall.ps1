@@ -10,6 +10,7 @@ param(
 $ErrorActionPreference = "Stop"
 $pins = Import-PowerShellDataFile -LiteralPath (Join-Path $BundleRoot "pins.psd1")
 Import-Module (Join-Path $BundleRoot "IwsPrivateTransport.psm1") -Force
+Import-Module (Join-Path $BundleRoot "IwsCleanTransaction.psm1") -Force
 
 if ($PlanOnly) {
     Write-Output "PLAN validate IWS-owned service and component paths"
@@ -29,10 +30,6 @@ if (-not $recovery.StartsWith($allowedRoot + '\', [StringComparison]::OrdinalIgn
     (Test-Path -LiteralPath $recovery)) {
     throw "IWS recovery path is invalid."
 }
-New-Item -ItemType Directory -Path $recovery -Force | Out-Null
-$null = & icacls.exe $recovery /inheritance:r /grant:r `
-    "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" 2>&1
-if ($LASTEXITCODE -ne 0) { throw "Unable to protect IWS recovery storage." }
 
 $installedTransport = Join-Path $pins.InstallRoot "iws-transport.exe"
 $service = Get-Service -Name $pins.ServiceName -ErrorAction SilentlyContinue
@@ -46,43 +43,50 @@ if ($service) {
     Assert-IwsArtifact -Path $installedTransport -ExpectedSha256 $pins.TransportSha256
 }
 
-Set-Content -LiteralPath (Join-Path $recovery "rollback.ready") -Value "IWS_ROLLBACK_V1" -Encoding ASCII
-
-$trust = Join-Path $pins.ClientRoot "Install-IwsProductionTrust.ps1"
-$certificate = Join-Path $pins.ClientRoot "iws-production-root-ca.crt"
-if ((Test-Path -LiteralPath $trust -PathType Leaf) -and
-    (Test-Path -LiteralPath $certificate -PathType Leaf)) {
-    & $trust -CertificatePath $certificate -Remove
-}
-$boundary = Join-Path $pins.ClientRoot "Remove-IwsWebViewBoundary.ps1"
-if (Test-Path -LiteralPath $boundary -PathType Leaf) { & $boundary }
-Get-Process -Name "IwsClient", "IwsBoundaryProbe" -ErrorAction SilentlyContinue |
-    Stop-Process -Force -ErrorAction Stop
-if ($service) {
-    if ($service.Status -ne "Stopped") {
-        Stop-Service -Name $pins.ServiceName
-        $service.WaitForStatus("Stopped", [TimeSpan]::FromSeconds(20))
-    }
-    $null = & $installedTransport --service $pins.ServiceName `
-        --daemon-addr $pins.DaemonAddress service uninstall 2>&1
-    if (Get-Service -Name $pins.ServiceName -ErrorAction SilentlyContinue) {
-        $null = & sc.exe delete $pins.ServiceName 2>&1
-    }
-}
-
-$shortcut = Join-Path ([Environment]::GetFolderPath("CommonPrograms")) "IWS.lnk"
-Remove-Item -LiteralPath $shortcut -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\IWS Secure Client" `
-    -Recurse -Force -ErrorAction SilentlyContinue
-foreach ($item in @(
+$components = @(
     @{ Source = $pins.InstallRoot; Name = "Transport" },
     @{ Source = $pins.ClientRoot; Name = "Client" },
     @{ Source = "C:\Program Files\IWS\Installer"; Name = "Installer" },
     @{ Source = $pins.StateRoot; Name = "State" },
     @{ Source = "C:\ProgramData\IWS\Install"; Name = "Receipt" }
-)) {
-    if (Test-Path -LiteralPath $item.Source) {
-        Move-Item -LiteralPath $item.Source -Destination (Join-Path $recovery $item.Name)
+)
+Invoke-IwsCleanRetirement -RecoveryRoot $recovery -Components $components `
+    -ProtectRecovery {
+        $null = & icacls.exe $recovery /inheritance:r /grant:r `
+            "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "Unable to protect IWS recovery storage." }
+    } `
+    -BeforeRetirement {
+        $trust = Join-Path $pins.ClientRoot "Install-IwsProductionTrust.ps1"
+        $certificate = Join-Path $pins.ClientRoot "iws-production-root-ca.crt"
+        if ((Test-Path -LiteralPath $trust -PathType Leaf) -and
+            (Test-Path -LiteralPath $certificate -PathType Leaf)) {
+            & $trust -CertificatePath $certificate -Remove
+        }
+        $boundary = Join-Path $pins.ClientRoot "Remove-IwsWebViewBoundary.ps1"
+        if (Test-Path -LiteralPath $boundary -PathType Leaf) { & $boundary }
+        Get-Process -Name "IwsClient", "IwsBoundaryProbe" -ErrorAction SilentlyContinue |
+            Stop-Process -Force -ErrorAction Stop
+        if ($service -and $service.Status -ne "Stopped") {
+            Stop-Service -Name $pins.ServiceName
+            $service.WaitForStatus("Stopped", [TimeSpan]::FromSeconds(20))
+        }
+        $shortcut = Join-Path ([Environment]::GetFolderPath("CommonPrograms")) "IWS.lnk"
+        Remove-Item -LiteralPath $shortcut -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\IWS Secure Client" `
+            -Recurse -Force -ErrorAction SilentlyContinue
+    } `
+    -AfterRetirement {
+        if ($service) {
+            $retiredTransport = Join-Path $recovery "Previous\Transport\iws-transport.exe"
+            if (-not (Test-Path -LiteralPath $retiredTransport -PathType Leaf)) {
+                throw "Retired IWS transport is unavailable for service removal."
+            }
+            $null = & $retiredTransport --service $pins.ServiceName `
+                --daemon-addr $pins.DaemonAddress service uninstall 2>&1
+            if (Get-Service -Name $pins.ServiceName -ErrorAction SilentlyContinue) {
+                $null = & sc.exe delete $pins.ServiceName 2>&1
+            }
+        }
     }
-}
 Write-Output "IWS_SETUP_PHASE=CLEAN_BACKUP"

@@ -64,6 +64,8 @@ done
 cp -a "$webview/WebView2Fixed" "$payload/WebView2Fixed"
 cp "$script_root/Install-IwsWebViewShellDevice.ps1" "$payload/Install-IwsWebViewShellDevice.ps1"
 cp "$script_root/../../windows/Backup-IwsClientForCleanReinstall.ps1" "$payload/Backup-IwsClientForCleanReinstall.ps1"
+cp "$script_root/../../windows/IwsCleanTransaction.psm1" "$payload/IwsCleanTransaction.psm1"
+cp "$script_root/../../windows/Resolve-IwsFailedCleanReinstall.ps1" "$payload/Resolve-IwsFailedCleanReinstall.ps1"
 cp "$script_root/../../windows/Restore-IwsClientAfterFailedClean.ps1" "$payload/Restore-IwsClientAfterFailedClean.ps1"
 cp "$script_root/../../windows/Uninstall-IwsClient.ps1" "$payload/Uninstall-IwsClient.ps1"
 cp "$uninstaller" "$payload/IwsUninstall.exe"

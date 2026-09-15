@@ -1,5 +1,8 @@
 using System;
 using System.IO;
+using System.IO.Compression;
+using System.Security.Cryptography;
+using System.Text;
 
 internal static class IwsSetupStateTests {
     private static int failures;
@@ -51,6 +54,60 @@ internal static class IwsSetupStateTests {
             "\"clientCheckpoint\":\"secure-client-v1.0.1\"}");
         Assert(receipt.DeviceId == "devicea" && receipt.Generation == 2,
             "valid protected receipt identity was not preserved");
+        const string establishedEvidence = "{\"schemaVersion\":1,\"status\":\"ESTABLISHED\"," +
+            "\"deviceId\":\"devicea\",\"generation\":2," +
+            "\"clientCheckpoint\":\"secure-client-v1.0.1\"}";
+        Assert(IwsSetupMetadata.IsEnrollmentMaterialUnavailable(establishedEvidence,
+            "devicea", 2, "secure-client-v1.0.1"),
+            "established generation evidence was not recognized");
+        Assert(!IwsSetupMetadata.IsEnrollmentMaterialUnavailable(establishedEvidence,
+            "devicea", 3, "secure-client-v1.0.1"),
+            "different generation was incorrectly marked consumed");
+
+        string retryRoot = Path.Combine(Path.GetTempPath(), "iws-retry-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(retryRoot);
+        try {
+            byte[] keyBytes = Encoding.ASCII.GetBytes("credential-free-fixture-key");
+            string archivePath = Path.Combine(retryRoot, "payload.zip");
+            using (ZipArchive archive = ZipFile.Open(archivePath, ZipArchiveMode.Create)) {
+                ZipArchiveEntry entry = archive.CreateEntry("one-use.key");
+                using (Stream stream = entry.Open()) stream.Write(keyBytes, 0, keyBytes.Length);
+            }
+            string keyHash;
+            using (SHA256 sha = SHA256.Create())
+                keyHash = BitConverter.ToString(sha.ComputeHash(keyBytes)).Replace("-", "").ToLowerInvariant();
+            File.WriteAllText(Path.Combine(retryRoot, "BUNDLE-MANIFEST.sha256"),
+                keyHash + "  one-use.key\n", Encoding.ASCII);
+            IwsSetupEvidence retryEvidence = Evidence();
+            retryEvidence.ServicePresent = true;
+            retryEvidence.ServiceOwned = true;
+            retryEvidence.NativeIdentityStatus = IwsNativeIdentityStatus.NeedsLogin;
+            IwsSetupDecision retryDecision = IwsSetupStateMachine.Evaluate(retryEvidence);
+            Assert(IwsSetupRecovery.RestoreEnrollmentKeyForRetry(retryRoot,
+                IwsSetupFailure.EnrollmentTransient, retryDecision),
+                "eligible transient retry did not restore verified embedded key");
+            Assert(File.ReadAllText(Path.Combine(retryRoot, "one-use.key")) ==
+                "credential-free-fixture-key", "retry restored wrong key bytes");
+            IwsSetupRecovery.DeleteTemporaryEnrollmentKey(retryRoot);
+            Assert(!File.Exists(Path.Combine(retryRoot, "one-use.key")),
+                "terminal retry cleanup retained temporary enrollment material");
+            Assert(!IwsSetupRecovery.RestoreEnrollmentKeyForRetry(retryRoot,
+                IwsSetupFailure.EnrollmentCredentialRejected, retryDecision),
+                "known-rejected enrollment material was restored");
+            Assert(!File.Exists(Path.Combine(retryRoot, "one-use.key")),
+                "known-rejected retry recreated key material");
+            IwsSetupEvidence enrolledEvidence = Evidence();
+            enrolledEvidence.ServicePresent = true;
+            enrolledEvidence.ServiceOwned = true;
+            enrolledEvidence.ReceiptPresent = true;
+            enrolledEvidence.ReceiptDeviceId = "device-a";
+            enrolledEvidence.ReceiptGeneration = 2;
+            IwsSetupDecision enrolledDecision = IwsSetupStateMachine.Evaluate(enrolledEvidence);
+            Assert(!IwsSetupRecovery.RestoreEnrollmentKeyForRetry(retryRoot,
+                IwsSetupFailure.EnrollmentTransient, enrolledDecision),
+                "enrolled identity retry restored enrollment material");
+        }
+        finally { Directory.Delete(retryRoot, true); }
 
         IwsSetupEvidence fresh = Evidence();
         IwsSetupDecision freshDecision = IwsSetupStateMachine.Evaluate(fresh);
@@ -71,6 +128,17 @@ internal static class IwsSetupStateTests {
             "partial NeedsLogin repair did not select enrollment");
         Assert(partialDecision.CanCleanReinstall,
             "fresh eligible partial install did not expose explicit clean reinstall");
+
+        IwsSetupEvidence rejectedPartial = Evidence();
+        rejectedPartial.ServicePresent = true;
+        rejectedPartial.ServiceOwned = true;
+        rejectedPartial.NativeIdentityStatus = IwsNativeIdentityStatus.NeedsLogin;
+        rejectedPartial.ArtifactEnrollmentMaterialUnavailable = true;
+        IwsSetupDecision rejectedPartialDecision = IwsSetupStateMachine.Evaluate(rejectedPartial);
+        Assert(rejectedPartialDecision.DefaultAction == IwsSetupAction.Blocked,
+            "known-used or rejected artifact remained eligible for enrollment");
+        Assert(!rejectedPartialDecision.UseEnrollmentKey && !rejectedPartialDecision.CanCleanReinstall,
+            "known-used or rejected artifact exposed key reuse or destructive clean");
 
         IwsSetupEvidence stoppedPartial = Evidence();
         stoppedPartial.ServicePresent = true;

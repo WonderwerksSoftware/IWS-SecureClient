@@ -63,6 +63,8 @@ test("Windows payload preparation combines only accepted transport and WebView2 
       "Install-IwsPrivateTransport.ps1",
       "Install-IwsWebViewShellDevice.ps1",
       "Backup-IwsClientForCleanReinstall.ps1",
+      "IwsCleanTransaction.psm1",
+      "Resolve-IwsFailedCleanReinstall.ps1",
       "Restore-IwsClientAfterFailedClean.ps1",
       "IwsClient.exe",
       "IwsUninstall.exe",

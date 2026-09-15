@@ -47,6 +47,15 @@ internal sealed class IwsReceiptDto {
     [DataMember(Name = "clientCheckpoint")] public string ClientCheckpoint { get; set; }
 }
 
+[DataContract]
+internal sealed class IwsEnrollmentEvidenceDto {
+    [DataMember(Name = "schemaVersion")] public int SchemaVersion { get; set; }
+    [DataMember(Name = "status")] public string Status { get; set; }
+    [DataMember(Name = "deviceId")] public string DeviceId { get; set; }
+    [DataMember(Name = "generation")] public int Generation { get; set; }
+    [DataMember(Name = "clientCheckpoint")] public string ClientCheckpoint { get; set; }
+}
+
 internal static class IwsSetupMetadata {
     private static readonly Regex DeviceId = new Regex("^[a-z0-9]{1,40}$", RegexOptions.CultureInvariant);
     private static readonly Regex ObjectId = new Regex("^[0-9a-f]{40}$", RegexOptions.CultureInvariant);
@@ -90,6 +99,17 @@ internal static class IwsSetupMetadata {
             Generation = dto.Generation,
             ClientCheckpoint = dto.ClientCheckpoint
         };
+    }
+
+    internal static bool IsEnrollmentMaterialUnavailable(string json, string deviceId, int generation,
+        string clientCheckpoint) {
+        IwsEnrollmentEvidenceDto dto = Deserialize<IwsEnrollmentEvidenceDto>(json);
+        if (dto == null || dto.SchemaVersion != 1 ||
+            (dto.Status != "ATTEMPTED" && dto.Status != "ESTABLISHED" && dto.Status != "REJECTED") ||
+            !DeviceId.IsMatch(dto.DeviceId ?? "") || dto.Generation < 1 ||
+            dto.ClientCheckpoint != "secure-client-v1.0.1") throw new InvalidDataException();
+        return dto.DeviceId == deviceId && dto.Generation == generation &&
+            dto.ClientCheckpoint == clientCheckpoint;
     }
 
     private static T Deserialize<T>(string json) where T : class {

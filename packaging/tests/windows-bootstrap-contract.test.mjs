@@ -44,7 +44,7 @@ test("Windows bootstrap installs the private transport and dedicated WebView2 sh
     "IwsSetupCompleteForm",
     "CleanReinstall",
     "Backup-IwsClientForCleanReinstall.ps1",
-    "Restore-IwsClientAfterFailedClean.ps1",
+    "Resolve-IwsFailedCleanReinstall.ps1",
     "IwsSetupMetadata.ParseManifest",
     "IwsSetupStateMachine.Evaluate"
   ]) assert.match(source, new RegExp(text.replace(/[.]/g, "[.]")));

@@ -12,7 +12,9 @@ $files = @(
     (Join-Path $WindowsRoot "Install-IwsPrivateTransport.ps1"),
     (Join-Path $WindowsRoot "Uninstall-IwsClient.ps1"),
     (Join-Path $WindowsRoot "Backup-IwsClientForCleanReinstall.ps1"),
-    (Join-Path $WindowsRoot "Restore-IwsClientAfterFailedClean.ps1")
+    (Join-Path $WindowsRoot "Restore-IwsClientAfterFailedClean.ps1"),
+    (Join-Path $WindowsRoot "Resolve-IwsFailedCleanReinstall.ps1"),
+    (Join-Path $WindowsRoot "IwsCleanTransaction.psm1")
 )
 foreach ($file in $files) {
     $tokens = $null

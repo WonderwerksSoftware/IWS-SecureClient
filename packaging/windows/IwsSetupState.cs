@@ -47,6 +47,7 @@ internal sealed class IwsSetupEvidence {
     internal string ReceiptDeviceId { get; set; }
     internal int ReceiptGeneration { get; set; }
     internal bool ShellAvailable { get; set; }
+    internal bool ArtifactEnrollmentMaterialUnavailable { get; set; }
     internal string ArtifactDeviceId { get; set; }
     internal int ArtifactGeneration { get; set; }
     internal DateTime ArtifactExpiresUtc { get; set; }
@@ -61,6 +62,7 @@ internal sealed class IwsSetupDecision {
     internal bool RequiresReassignmentConfirmation { get; set; }
     internal bool CanOpenIws { get; set; }
     internal bool ArtifactExpired { get; set; }
+    internal bool ArtifactEnrollmentMaterialUnavailable { get; set; }
 }
 
 internal static class IwsSetupStateMachine {
@@ -70,6 +72,7 @@ internal static class IwsSetupStateMachine {
         IwsSetupDecision decision = new IwsSetupDecision {
             DefaultAction = IwsSetupAction.Blocked,
             ArtifactExpired = expired,
+            ArtifactEnrollmentMaterialUnavailable = evidence.ArtifactEnrollmentMaterialUnavailable,
             CanOpenIws = evidence.ShellAvailable
         };
 
@@ -82,13 +85,13 @@ internal static class IwsSetupStateMachine {
             if (!String.Equals(evidence.ReceiptDeviceId, evidence.ArtifactDeviceId,
                     StringComparison.Ordinal)) {
                 decision.State = IwsDetectedState.DifferentDevice;
-                decision.CanCleanReinstall = !expired;
+                decision.CanCleanReinstall = !expired && !evidence.ArtifactEnrollmentMaterialUnavailable;
                 decision.RequiresReassignmentConfirmation = true;
                 return decision;
             }
             decision.State = IwsDetectedState.ExistingIdentity;
             decision.DefaultAction = IwsSetupAction.Repair;
-            decision.CanCleanReinstall = !expired &&
+            decision.CanCleanReinstall = !expired && !evidence.ArtifactEnrollmentMaterialUnavailable &&
                 evidence.ArtifactGeneration > evidence.ReceiptGeneration;
             return decision;
         }
@@ -96,7 +99,7 @@ internal static class IwsSetupStateMachine {
         if (evidence.NativeIdentityStatus == IwsNativeIdentityStatus.Registered) {
             decision.State = IwsDetectedState.LegacyIdentity;
             decision.DefaultAction = IwsSetupAction.Repair;
-            decision.CanCleanReinstall = !expired;
+            decision.CanCleanReinstall = !expired && !evidence.ArtifactEnrollmentMaterialUnavailable;
             decision.RequiresReassignmentConfirmation = true;
             return decision;
         }
@@ -104,7 +107,7 @@ internal static class IwsSetupStateMachine {
         if (evidence.NativeIdentityStatus == IwsNativeIdentityStatus.NeedsLogin &&
             evidence.ServicePresent) {
             decision.State = IwsDetectedState.PartialNeedsLogin;
-            if (!expired) {
+            if (!expired && !evidence.ArtifactEnrollmentMaterialUnavailable) {
                 decision.DefaultAction = IwsSetupAction.Repair;
                 decision.UseEnrollmentKey = true;
                 decision.CanCleanReinstall = true;
@@ -115,13 +118,13 @@ internal static class IwsSetupStateMachine {
         if (evidence.ServicePresent || evidence.StatePresent) {
             decision.State = IwsDetectedState.UnknownIdentity;
             decision.DefaultAction = IwsSetupAction.Repair;
-            decision.CanCleanReinstall = !expired;
+            decision.CanCleanReinstall = !expired && !evidence.ArtifactEnrollmentMaterialUnavailable;
             decision.RequiresReassignmentConfirmation = true;
             return decision;
         }
 
         decision.State = IwsDetectedState.Fresh;
-        if (!expired) {
+        if (!expired && !evidence.ArtifactEnrollmentMaterialUnavailable) {
             decision.DefaultAction = IwsSetupAction.Install;
             decision.UseEnrollmentKey = true;
         }

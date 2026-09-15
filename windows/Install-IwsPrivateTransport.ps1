@@ -6,6 +6,7 @@ param(
     [Parameter(Mandatory = $true)][string]$BundleRoot,
     [Parameter(Mandatory = $true)][ValidateSet("Enroll", "Repair")][string]$Mode,
     [switch]$PreserveSetupKey,
+    [string]$CleanRecoveryRoot,
     [switch]$PlanOnly
 )
 
@@ -57,6 +58,30 @@ function Save-IwsInstallationReceipt {
     Set-IwsRestrictedFileAcl -Path $receiptPath
 }
 
+function Get-IwsEnrollmentEvidencePath {
+    param([Parameter(Mandatory = $true)][psobject]$Payload)
+    return Join-Path "C:\ProgramData\IWS\EnrollmentEvidence" `
+        (([string]$Payload.deviceId) + "-g" + ([int]$Payload.generation) + ".json")
+}
+
+function Save-IwsEnrollmentEvidence {
+    param(
+        [Parameter(Mandatory = $true)][psobject]$Payload,
+        [Parameter(Mandatory = $true)][ValidateSet("ATTEMPTED", "ESTABLISHED", "REJECTED")][string]$Status
+    )
+    $root = "C:\ProgramData\IWS\EnrollmentEvidence"
+    Set-IwsRestrictedDirectoryAcl -Path $root
+    $path = Get-IwsEnrollmentEvidencePath -Payload $Payload
+    [pscustomobject]@{
+        schemaVersion = 1
+        status = $Status
+        deviceId = [string]$Payload.deviceId
+        generation = [int]$Payload.generation
+        clientCheckpoint = [string]$Payload.clientCheckpoint
+    } | ConvertTo-Json | Set-Content -LiteralPath $path -Encoding UTF8
+    Set-IwsRestrictedFileAcl -Path $path
+}
+
 try {
     $payload = Read-IwsPayload -Path $PayloadPath
     $setupKeyPath = $payload.setup_key_file
@@ -65,6 +90,9 @@ try {
     }
     if ($Mode -eq "Enroll" -and $PreserveSetupKey) {
         throw "Enrollment cannot retain temporary enrollment material."
+    }
+    if ($Mode -eq "Repair" -and -not [string]::IsNullOrWhiteSpace($CleanRecoveryRoot)) {
+        throw "Repair cannot establish a clean enrollment record."
     }
 
     if ($PlanOnly) {
@@ -169,6 +197,7 @@ try {
         }
         Write-Output "IWS_SETUP_PHASE=ENROLLMENT"
         $enrollmentArgs = Get-IwsEnrollmentArguments -Payload $payload
+        Save-IwsEnrollmentEvidence -Payload $payload -Status "ATTEMPTED"
         try {
             Invoke-IwsNativeSanitized -FilePath $installedTransport -Arguments $enrollmentArgs `
                 -FailureMessage "IWS device provisioning failed." -ClassifyEnrollmentFailure
@@ -176,11 +205,21 @@ try {
         catch {
             if ($_.Exception.Message -eq "IWS_ENROLLMENT_CREDENTIAL_REJECTED") {
                 Write-Output "IWS_SETUP_ERROR=ENROLLMENT_CREDENTIAL_REJECTED"
+                Save-IwsEnrollmentEvidence -Payload $payload -Status "REJECTED"
             }
             elseif ($_.Exception.Message -eq "IWS_ENROLLMENT_TRANSIENT") {
                 Write-Output "IWS_SETUP_ERROR=ENROLLMENT_TRANSIENT"
+                Remove-Item -LiteralPath (Get-IwsEnrollmentEvidencePath -Payload $payload) -Force -ErrorAction Stop
             }
             throw
+        }
+        Write-Output "IWS_SETUP_PHASE=ENROLLMENT_ESTABLISHED"
+        Save-IwsEnrollmentEvidence -Payload $payload -Status "ESTABLISHED"
+        if (-not [string]::IsNullOrWhiteSpace($CleanRecoveryRoot)) {
+            Import-Module (Join-Path $BundleRoot "IwsCleanTransaction.psm1") -Force
+            Write-IwsCleanEnrollmentEstablished -RecoveryRoot $CleanRecoveryRoot `
+                -DeviceId $payload.deviceId -Generation $payload.generation `
+                -ClientCheckpoint $payload.clientCheckpoint
         }
         Save-IwsInstallationReceipt -Payload $payload
     }
