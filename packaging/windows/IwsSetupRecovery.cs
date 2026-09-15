@@ -6,6 +6,16 @@ using System.Security.Cryptography;
 using System.Security.Principal;
 
 internal static class IwsSetupRecovery {
+    internal static IwsSetupDecision PrepareRetry(string workspace, IwsSetupFailure failure,
+        IwsSetupEvidence evidence) {
+        IwsSetupDecision decision = IwsSetupStateMachine.Evaluate(evidence);
+        if (decision.DefaultAction != IwsSetupAction.Install &&
+            decision.DefaultAction != IwsSetupAction.Repair) return null;
+        if (failure == IwsSetupFailure.EnrollmentTransient &&
+            !RestoreEnrollmentKeyForRetry(workspace, failure, decision)) return null;
+        return decision;
+    }
+
     internal static void DeleteTemporaryEnrollmentKey(string workspace) {
         string keyPath = Path.Combine(Path.GetFullPath(workspace), "one-use.key");
         if (File.Exists(keyPath)) File.Delete(keyPath);

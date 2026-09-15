@@ -192,7 +192,10 @@ try {
     $nativeIdentityStatus = Get-IwsNativeIdentityStatusFromOutput -Output $statusOutput -ExitCode $statusExit
 
     if ($Mode -eq "Enroll") {
-        if ($nativeIdentityStatus -ne "NeedsLogin") {
+        $preflightFailureMarker = Get-IwsEnrollmentPreflightFailureMarker `
+            -NativeIdentityStatus $nativeIdentityStatus
+        if (-not [string]::IsNullOrEmpty($preflightFailureMarker)) {
+            Write-Output $preflightFailureMarker
             throw "IWS_ENROLLMENT_TRANSIENT"
         }
         Write-Output "IWS_SETUP_PHASE=ENROLLMENT"

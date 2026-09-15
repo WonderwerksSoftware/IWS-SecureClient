@@ -94,23 +94,15 @@ internal static class IwsSetupBootstrap {
                         }
                         retryUsed = true;
                         evidence = InspectInstallation(workspace, manifest);
-                        decision = IwsSetupStateMachine.Evaluate(evidence);
-                        action = decision.DefaultAction;
-                        if (action != IwsSetupAction.Install && action != IwsSetupAction.Repair) {
+                        decision = IwsSetupRecovery.PrepareRetry(workspace, failedAttempt, evidence);
+                        if (decision == null) {
                             MessageBox.Show("Retry cannot continue safely with the detected IWS state. " +
                                 "No identity was automatically replaced. Request a fresh device installer or contact IWS support.",
                                 "IWS Setup", MessageBoxButtons.OK, MessageBoxIcon.Error);
                             Environment.ExitCode = 1;
                             return;
                         }
-                        if (failedAttempt == IwsSetupFailure.EnrollmentTransient &&
-                            !IwsSetupRecovery.RestoreEnrollmentKeyForRetry(workspace, failedAttempt, decision)) {
-                            MessageBox.Show("The bounded enrollment retry cannot continue with the detected state. " +
-                                "No enrollment material was reused. Request a fresh installer or contact IWS support.",
-                                "IWS Setup", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                            Environment.ExitCode = 1;
-                            return;
-                        }
+                        action = decision.DefaultAction;
                     }
                 }
             }

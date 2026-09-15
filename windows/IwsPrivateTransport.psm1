@@ -95,6 +95,17 @@ function Get-IwsNativeIdentityStatusFromOutput {
     return "Unknown"
 }
 
+function Get-IwsEnrollmentPreflightFailureMarker {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet("Unknown", "NeedsLogin", "Registered")]
+        [string]$NativeIdentityStatus
+    )
+    if ($NativeIdentityStatus -eq "NeedsLogin") { return $null }
+    return "IWS_SETUP_ERROR=ENROLLMENT_TRANSIENT"
+}
+
 function Test-IwsEnrollmentCredentialRejection {
     [CmdletBinding()]
     param([AllowEmptyString()][string]$Output)
@@ -267,6 +278,7 @@ function Test-IwsNativeSuccess {
 Export-ModuleMember -Function @(
     "Read-IwsPayload",
     "Get-IwsNativeIdentityStatusFromOutput",
+    "Get-IwsEnrollmentPreflightFailureMarker",
     "Test-IwsEnrollmentCredentialRejection",
     "Test-IwsServiceCommandPathOwned",
     "Get-IwsServiceInstallArguments",

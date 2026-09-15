@@ -96,6 +96,22 @@ internal static class IwsSetupStateTests {
                 "known-rejected enrollment material was restored");
             Assert(!File.Exists(Path.Combine(retryRoot, "one-use.key")),
                 "known-rejected retry recreated key material");
+            var retryRecords = new System.Collections.Generic.List<string>();
+            IwsSetupDiagnostics retryDiagnostics = new IwsSetupDiagnostics(
+                delegate(string record) { retryRecords.Add(record); });
+            retryDiagnostics.AcceptChildOutput("IWS_SETUP_ERROR=ENROLLMENT_TRANSIENT");
+            IwsSetupEvidence laterNeedsLogin = Evidence();
+            laterNeedsLogin.ServicePresent = true;
+            laterNeedsLogin.ServiceOwned = true;
+            laterNeedsLogin.NativeIdentityStatus = IwsNativeIdentityStatus.NeedsLogin;
+            IwsSetupDecision preparedRetry = IwsSetupRecovery.PrepareRetry(
+                retryRoot, retryDiagnostics.CurrentFailure, laterNeedsLogin);
+            Assert(preparedRetry != null && preparedRetry.State == IwsDetectedState.PartialNeedsLogin &&
+                preparedRetry.UseEnrollmentKey,
+                "actual Setup retry path did not select eligible NeedsLogin enrollment");
+            Assert(File.Exists(Path.Combine(retryRoot, "one-use.key")),
+                "actual Setup retry path did not restore verified temporary key");
+            IwsSetupRecovery.DeleteTemporaryEnrollmentKey(retryRoot);
             IwsSetupEvidence enrolledEvidence = Evidence();
             enrolledEvidence.ServicePresent = true;
             enrolledEvidence.ServiceOwned = true;

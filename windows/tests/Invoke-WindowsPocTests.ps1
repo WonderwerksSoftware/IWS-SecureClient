@@ -164,6 +164,12 @@ try {
     Assert-True ((Get-IwsNativeIdentityStatusFromOutput `
         -Output "rpc transport unavailable" -ExitCode 1) -eq "Unknown") `
         "transient native failure was treated as NeedsLogin"
+    Assert-True ((Get-IwsEnrollmentPreflightFailureMarker -NativeIdentityStatus "Unknown") -eq `
+        "IWS_SETUP_ERROR=ENROLLMENT_TRANSIENT") `
+        "initial Unknown status did not emit the allowlisted transient marker"
+    Assert-True ([string]::IsNullOrEmpty((Get-IwsEnrollmentPreflightFailureMarker `
+        -NativeIdentityStatus "NeedsLogin"))) `
+        "explicit NeedsLogin was incorrectly classified as a pre-enrollment failure"
     Assert-True (Test-IwsEnrollmentCredentialRejection `
         -Output "rpc error: PermissionDenied: setup key is expired") `
         "expired setup key was not safely classified"
