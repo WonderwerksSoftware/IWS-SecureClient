@@ -60,6 +60,7 @@ export async function packageLinuxDevice(request, transportFile, rpmBuilder = "/
     await source("linux/iws-client.sudoers", "etc/sudoers.d/iws-client", 0o440);
     await source("linux/com.impactwiring.iws-client.policy", "usr/share/polkit-1/actions/com.impactwiring.iws-client.policy");
     await source("linux/iws.desktop", "usr/share/applications/iws.desktop");
+    await source("branding/iws-icon-source.svg", "usr/share/icons/hicolor/scalable/apps/iws.svg");
     await source("windows/webview2/iws-production-root-ca.crt", "usr/lib/iws-client/iws-root-ca.crt");
     await source("third_party/netbird/LICENSE", "usr/share/doc/iws-secure-client/netbird-LICENSE");
     await source("third_party/netbird/NOTICE.md", "usr/share/doc/iws-secure-client/netbird-NOTICE.md");
@@ -84,7 +85,7 @@ export async function packageLinuxDevice(request, transportFile, rpmBuilder = "/
       const quote = value => "'" + value.replaceAll("'", "'\\''") + "'";
       const spec = `%global __os_install_post %{nil}\nName: iws-secure-client\nVersion: ${PACKAGE_VERSION}\nRelease: ${request.generation}\nSummary: Managed private IWS client\nLicense: Proprietary AND BSD-3-Clause AND MPL-2.0\nBuildArch: x86_64\nRequires: python3, iproute, nftables, passt, sudo, polkit, util-linux, ca-certificates, openssl, nss-tools, systemd, python3-gobject, gtk3, webkit2gtk4.1\n%description\nManaged private IWS client\n%install\nmkdir -p %{buildroot}\ncp -a ${quote(tree)}/. %{buildroot}/\n%post\n${scripts.postInstall}\n%preun\n${scripts.remove}\n%files\n%defattr(-,root,root,-)\n/usr/bin/iws\n/usr/lib/iws-client\n/usr/lib/systemd/system/iws-client.service\n/etc/sudoers.d/iws-client\n/usr/share/applications/iws.desktop\n/usr/share/polkit-1/actions/com.impactwiring.iws-client.policy\n/usr/share/iws-client\n/usr/share/doc/iws-secure-client\n`;
       const specPath = path.join(top, "SPECS/iws.spec");
-      await writeFile(specPath, spec, {mode: 0o600});
+      await writeFile(specPath, spec + "/usr/share/icons/hicolor/scalable/apps/iws.svg\n", {mode: 0o600});
       await run(rpmBuilder, ["-bb", "--define", `_topdir ${top}`, "--define", `_tmppath ${path.join(top, "TMP")}`, specPath]);
       const rpms = await readdir(path.join(top, "RPMS/x86_64"));
       if (rpms.length !== 1 || !rpms[0].endsWith(".rpm")) throw new Error("LINUX_PACKAGE_OUTPUT_INVALID");

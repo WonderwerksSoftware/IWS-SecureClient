@@ -12,10 +12,13 @@ import gi
 gi.require_version('Gtk', '3.0')
 gi.require_version('WebKit2', '4.1')
 from gi.repository import Gtk, GLib, WebKit2
+GLib.set_prgname('iws')
+GLib.set_application_name('IWS')
 
 class IwsWindow(Gtk.Window):
     def __init__(self):
         super().__init__(title='IWS')
+        self.set_icon_name('iws')
         self.set_default_size(1100, 760)
         self.connect('destroy', Gtk.main_quit)
         self.state = LoadState()

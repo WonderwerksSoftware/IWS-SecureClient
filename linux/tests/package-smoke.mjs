@@ -32,6 +32,11 @@ for (const platform of ["LINUX_DEBIAN", "LINUX_FEDORA"]) {
     assert.equal((await stat(path.join(extracted, 'usr'))).mode & 0o777, 0o755);
     assert.equal((await stat(path.join(extracted, 'usr/bin/iws'))).mode & 0o777, 0o755);
     assert.equal((await stat(path.join(extracted, 'usr/lib/iws-client/iws-root-ca.crt'))).mode & 0o777, 0o644);
+    const desktop = await readFile(path.join(extracted, 'usr/share/applications/iws.desktop'), 'utf8');
+    const icon = desktop.match(/^Icon=(.+)$/m)?.[1];
+    assert.ok(icon, 'installed launcher must declare its icon');
+    assert.deepEqual(await readFile(path.join(extracted, `usr/share/icons/hicolor/scalable/apps/${icon}.svg`)),
+      await readFile(path.join(root, 'branding/iws-icon-source.svg')));
     assert.equal((await stat(path.join(extracted, 'usr/lib/iws-client/iws-setup-helper'))).mode & 0o777, 0o755);
     assert.equal((await stat(path.join(extracted, 'usr/share/polkit-1/actions/com.impactwiring.iws-client.policy'))).mode & 0o777, 0o644);
     assert.equal((await stat(path.join(extracted, 'usr/share/iws-client/bootstrap/one-use.key'))).mode & 0o777, 0o600);
@@ -39,6 +44,9 @@ for (const platform of ["LINUX_DEBIAN", "LINUX_FEDORA"]) {
     const query = spawnSync('rpm', ['-qp', '--qf', '%{VERSION}', result.artifactPath], {encoding: 'utf8'});
     assert.equal(query.status, 0, query.stderr);
     assert.equal(query.stdout, '1.0.2');
+    const files = spawnSync('rpm', ['-qlp', result.artifactPath], {encoding: 'utf8'});
+    assert.equal(files.status, 0);
+    assert.ok(files.stdout.split('\n').includes('/usr/share/icons/hicolor/scalable/apps/iws.svg'));
     const scripts = spawnSync('rpm', ['-qp', '--scripts', result.artifactPath], {encoding: 'utf8'});
     assert.equal(scripts.status, 0, scripts.stderr);
     assert.match(scripts.stdout, /runtime[.]py prepare/);

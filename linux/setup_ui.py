@@ -61,9 +61,12 @@ def main():
         launch_existing()
     import gi
     gi.require_version('Gtk', '3.0')
-    from gi.repository import Gtk
+    from gi.repository import Gtk, GLib
+    GLib.set_prgname('iws')
+    GLib.set_application_name('IWS')
     view = view_for(status)
     window = Gtk.Window(title=view['title'])
+    window.set_icon_name('iws')
     window.set_default_size(460, 190)
     window.set_resizable(False)
     window.set_position(Gtk.WindowPosition.CENTER)
