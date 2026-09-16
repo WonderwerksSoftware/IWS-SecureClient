@@ -1,2 +1,2 @@
 #!/bin/sh
-exec /usr/bin/sudo -n --preserve-env=DISPLAY,WAYLAND_DISPLAY,XAUTHORITY /usr/bin/python3 -I /usr/lib/iws-client/runtime.py launch
+exec /usr/bin/python3 -I /usr/lib/iws-client/setup_ui.py

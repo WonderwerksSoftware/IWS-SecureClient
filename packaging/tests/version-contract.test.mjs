@@ -6,8 +6,8 @@ test("client-version.json exposes the production candidate with historical accep
   const version = JSON.parse(await readFile(new URL("../../client-version.json", import.meta.url), "utf8"));
   assert.deepEqual(version, {
     schemaVersion: 2,
-    release: "1.0.1",
-    releaseTag: "secure-client-v1.0.1",
+    release: "1.0.2",
+    releaseTag: "secure-client-v1.0.2",
     android: {
       packageIdentity: "com.impactwiring.iwsconnectpoc",
       versionCode: 3,
@@ -21,7 +21,7 @@ test("client-version.json exposes the production candidate with historical accep
       acceptedCommit: "06151df888320d6f45200aee42e44da162da6b1b",
       acceptedTag: "windows-productization-poc-pass-20260904"
     },
-    linux: {packageIdentity: "iws-secure-client", acceptedCommit: "d6e52300ab5d687f67f083554ace994712cdd354", platforms: ["LINUX_DEBIAN", "LINUX_FEDORA"], rebootVerification: "USER_DEFERRED"},
+    linux: {packageIdentity: "iws-secure-client", packageVersion: "1.0.2", acceptedCommit: "d6e52300ab5d687f67f083554ace994712cdd354", platforms: ["LINUX_DEBIAN", "LINUX_FEDORA"], rebootVerification: "USER_DEFERRED"},
     transport: {
       netbirdVersion: "0.77.1",
       netbirdCommit: "79a06720b684768b421f0a54f3bb14f22704994f",
@@ -39,7 +39,7 @@ test("client-version.json exposes the production candidate with historical accep
 test("Node package metadata matches the production candidate release", async () => {
   const packageJson = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8"));
   const packageLock = JSON.parse(await readFile(new URL("../../package-lock.json", import.meta.url), "utf8"));
-  assert.equal(packageJson.version, "1.0.1");
+  assert.equal(packageJson.version, "1.0.2");
   assert.equal(packageLock.version, packageJson.version);
   assert.equal(packageLock.packages[""].version, packageJson.version);
 });

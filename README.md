@@ -1,6 +1,6 @@
 # IWS Secure Client
 
-Canonical source for the IWS-owned Android and Windows applications that open
+Canonical source for the IWS-owned Android, Windows, and Linux applications that open
 IWS over private connectivity without exposing NetBird, setup keys, addresses,
 or tunnel controls to employees.
 
@@ -16,6 +16,8 @@ IWS Stack.
   NetBird adapter, per-app isolation, native shell, and tests.
 - `windows/` — accepted hidden transport controller, dedicated Fixed Version
   WebView2 shell, firewall boundary, build scripts, and tests.
+- `linux/` — isolated native WebKit shell, GTK3 guided setup controller, fixed
+  polkit helper, systemd unit, namespace boundary, and focused tests.
 - `branding/` — shared accepted IWS client mark assets.
 - `packaging/` — versioned platform packager boundary consumed by IWS Stack.
 - `scripts/` — clean-room Android build, secret scan, and artifact verification.
@@ -27,14 +29,15 @@ IWS Stack.
 IWS Stack selects an exact SecureClient tag/commit and invokes
 `packaging/package-device.mjs` with `IWS_PACKAGE_REQUEST_FILE` pointing to a
 mode-`0600` JSON request. The request contains private file paths, never the
-setup key itself. The packager returns one JSON metadata record for one APK or
-EXE. See `docs/architecture/provisioning-boundary.md` and
+setup key itself. The packager returns one JSON metadata record for one APK,
+EXE, DEB, or RPM. See `docs/architecture/provisioning-boundary.md` and
 `client-version.json`.
 
 ## Verification
 
 ```sh
 npm test
+python3 -m unittest linux.tests.test_bootstrap linux.tests.test_setup linux.tests.test_shell_policy
 node --test windows/webview2/tests/productization-contract.test.mjs
 ./scripts/secret-scan.sh
 ./scripts/build-android-poc.sh
@@ -48,6 +51,8 @@ disposable Windows client VM.
 
 Android and Windows one-app POC architecture, productized shells, provisioning,
 reboot persistence, revocation, and isolation have physical acceptance
-evidence. This is still a POC checkpoint, not a production-ready release: code
+evidence. Linux 1.0.2 adds offline package preparation and an explicit guided
+setup/repair boundary; its physical acceptance remains a separate gate. This is
+still a POC checkpoint, not a production-ready release: code
 signing, installer productization, updates, fleet operations, support telemetry,
 and production deployment remain future work.

@@ -1,3 +1,3 @@
 # Fixed managed launcher only; no caller-supplied commands, paths, or URLs.
 Defaults!/usr/bin/python3 env_keep += "DISPLAY WAYLAND_DISPLAY XAUTHORITY"
-ALL ALL=(root) NOPASSWD: /usr/bin/python3 -I /usr/lib/iws-client/runtime.py launch
+ALL ALL=(root) NOPASSWD: /usr/bin/python3 -I /usr/lib/iws-client/runtime.py launch-existing

@@ -1,0 +1,27 @@
+#!/usr/bin/python3 -I
+"""Fixed polkit helper. Arguments are a closed action enum; paths are compiled in."""
+import importlib.util
+import os
+from pathlib import Path
+import re
+import sys
+
+
+def main():
+    if os.geteuid() != 0 or len(sys.argv) != 2 or sys.argv[1] not in ('enroll', 'repair', 'replace'):
+        raise ValueError('IWS_INVOCATION_INVALID')
+    source = Path('/usr/lib/iws-client/runtime.py')
+    spec = importlib.util.spec_from_file_location('iws_runtime', source)
+    runtime = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runtime)
+    os.umask(0o077)
+    runtime.dispatch_helper(['iws-setup-helper', sys.argv[1]])
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception as error:
+        code = str(error)
+        print(code if re.fullmatch(r'IWS_[A-Z_]+', code) else 'IWS_OPERATION_FAILED', file=sys.stderr)
+        raise SystemExit(1)
