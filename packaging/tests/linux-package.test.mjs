@@ -5,8 +5,18 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {fileURLToPath} from "node:url";
+import {linuxPackageScripts} from "../linux/package-device.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+
+test("DEB and RPM package lifecycle scripts only prepare offline and preserve enrollment on removal", () => {
+  const scripts = linuxPackageScripts();
+  assert.equal(scripts.postInstall, "/usr/bin/python3 -I /usr/lib/iws-client/runtime.py prepare");
+  assert.doesNotMatch(scripts.postInstall, /install|enroll|restart|enable|--now/);
+  assert.match(scripts.remove, /systemctl stop iws-client[.]service/);
+  assert.match(scripts.remove, /systemctl disable iws-client[.]service/);
+  assert.doesNotMatch(scripts.remove, /var[/]lib|netbird|tailscale|rm /i);
+});
 test("Linux package rejects a wrong transport before emitting an installable artifact", async () => {
   const work = await mkdtemp(path.join(os.tmpdir(), "iws-linux-package-test-"));
   try {

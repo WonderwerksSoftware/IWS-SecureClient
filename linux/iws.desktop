@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=IWS
+Icon=iws
+StartupWMClass=iws
+Comment=Open the private IWS workspace
+Exec=/usr/bin/iws
+Terminal=false
+Categories=Office;
+StartupNotify=true

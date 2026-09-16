@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
-  "release": "1.0.1",
-  "releaseTag": "secure-client-v1.0.1",
+  "release": "1.0.3",
+  "releaseTag": "secure-client-v1.0.3",
   "android": {
     "packageIdentity": "com.impactwiring.iwsconnectpoc",
     "versionCode": 3,
@@ -17,7 +17,8 @@
   },
   "linux": {
     "packageIdentity": "iws-secure-client",
-    "acceptedCommit": "d6e52300ab5d687f67f083554ace994712cdd354",
+    "packageVersion": "1.0.3",
+    "acceptedCommit": "2ef63e2e34bff31b0ad9a7d12ccf6c97c33c4e51",
     "platforms": ["LINUX_DEBIAN", "LINUX_FEDORA"],
     "rebootVerification": "USER_DEFERRED"
   },
