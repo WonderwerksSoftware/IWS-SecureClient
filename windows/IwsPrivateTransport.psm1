@@ -33,7 +33,10 @@ function Read-IwsPayload {
         throw "Provisioning payload file was not found."
     }
     $payload = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
-    foreach ($field in @("device_name", "management_server", "setup_key_file", "iws_entrypoint")) {
+    foreach ($field in @(
+        "deviceId", "generation", "clientCheckpoint", "expiresAt", "device_name",
+        "management_server", "setup_key_file", "iws_entrypoint"
+    )) {
         if ([string]::IsNullOrWhiteSpace([string]$payload.$field)) {
             throw "Provisioning payload is missing required field: $field."
         }
@@ -41,8 +44,26 @@ function Read-IwsPayload {
     if ([string]$payload.device_name -notmatch "^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$") {
         throw "device_name contains prohibited characters or is too long."
     }
+    if ([string]$payload.deviceId -notmatch "^[a-z0-9]{1,40}$" -or
+        [int]$payload.generation -lt 1 -or
+        [string]$payload.clientCheckpoint -ne "secure-client-v1.0.1") {
+        throw "Provisioning payload identity is invalid."
+    }
+    $expires = [DateTime]::MinValue
+    if (-not [DateTime]::TryParse(
+        [string]$payload.expiresAt,
+        [Globalization.CultureInfo]::InvariantCulture,
+        [Globalization.DateTimeStyles]::AdjustToUniversal,
+        [ref]$expires
+    )) {
+        throw "Provisioning payload expiry is invalid."
+    }
 
     return [pscustomobject]@{
+        deviceId = [string]$payload.deviceId
+        generation = [int]$payload.generation
+        clientCheckpoint = [string]$payload.clientCheckpoint
+        expiresAt = $expires.ToUniversalTime()
         device_name = [string]$payload.device_name
         management_server = ConvertTo-IwsAbsoluteUri `
             -Value ([string]$payload.management_server) `
@@ -54,8 +75,66 @@ function Read-IwsPayload {
         iws_entrypoint = ConvertTo-IwsAbsoluteUri `
             -Value ([string]$payload.iws_entrypoint) `
             -FieldName "iws_entrypoint" `
-            -AllowedSchemes @("http", "https")
+            -AllowedSchemes @("https")
     }
+}
+
+function Get-IwsNativeIdentityStatusFromOutput {
+    [CmdletBinding()]
+    param(
+        [AllowEmptyString()][string]$Output,
+        [Parameter(Mandatory = $true)][int]$ExitCode
+    )
+
+    if ($Output -match "(?m)^Daemon status:\s*NeedsLogin\s*$") {
+        return "NeedsLogin"
+    }
+    if ($ExitCode -eq 0 -and $Output -match "(?m)^NetBird IP:\s*[^\s]+\s*$") {
+        return "Registered"
+    }
+    return "Unknown"
+}
+
+function Get-IwsEnrollmentPreflightFailureMarker {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateSet("Unknown", "NeedsLogin", "Registered")]
+        [string]$NativeIdentityStatus
+    )
+    if ($NativeIdentityStatus -eq "NeedsLogin") { return $null }
+    return "IWS_SETUP_ERROR=ENROLLMENT_TRANSIENT"
+}
+
+function Test-IwsEnrollmentCredentialRejection {
+    [CmdletBinding()]
+    param([AllowEmptyString()][string]$Output)
+
+    return [bool]($Output -match "(?i)(permissiondenied|permission denied|setup[ -]?key).*(expired|invalid|revoked|used|exhausted)|peer login has expired")
+}
+
+function Test-IwsServiceCommandPathOwned {
+    [CmdletBinding()]
+    param(
+        [AllowEmptyString()][string]$CommandLine,
+        [Parameter(Mandatory = $true)][string]$ExpectedPath
+    )
+
+    $value = [Environment]::ExpandEnvironmentVariables($CommandLine).Trim()
+    if ([string]::IsNullOrWhiteSpace($value)) { return $false }
+    if ($value.StartsWith('"')) {
+        $end = $value.IndexOf('"', 1)
+        if ($end -lt 2) { return $false }
+        $executable = $value.Substring(1, $end - 1)
+    }
+    else {
+        $end = $value.IndexOf(' ')
+        $executable = if ($end -lt 0) { $value } else { $value.Substring(0, $end) }
+    }
+    try {
+        return [IO.Path]::GetFullPath($executable) -eq [IO.Path]::GetFullPath($ExpectedPath)
+    }
+    catch { return $false }
 }
 
 function Get-IwsServiceInstallArguments {
@@ -153,19 +232,26 @@ function Invoke-IwsNativeSanitized {
     param(
         [Parameter(Mandatory = $true)][string]$FilePath,
         [Parameter(Mandatory = $true)][string[]]$Arguments,
-        [Parameter(Mandatory = $true)][string]$FailureMessage
+        [Parameter(Mandatory = $true)][string]$FailureMessage,
+        [switch]$ClassifyEnrollmentFailure
     )
 
     $previousPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = "Continue"
-        $null = & $FilePath @Arguments 2>&1 | Out-String
+        $output = & $FilePath @Arguments 2>&1 | Out-String
         $exitCode = $LASTEXITCODE
     }
     finally {
         $ErrorActionPreference = $previousPreference
     }
     if ($exitCode -ne 0) {
+        if ($ClassifyEnrollmentFailure) {
+            if (Test-IwsEnrollmentCredentialRejection -Output $output) {
+                throw "IWS_ENROLLMENT_CREDENTIAL_REJECTED"
+            }
+            throw "IWS_ENROLLMENT_TRANSIENT"
+        }
         throw "$FailureMessage Exit code: $exitCode."
     }
 }
@@ -191,6 +277,10 @@ function Test-IwsNativeSuccess {
 
 Export-ModuleMember -Function @(
     "Read-IwsPayload",
+    "Get-IwsNativeIdentityStatusFromOutput",
+    "Get-IwsEnrollmentPreflightFailureMarker",
+    "Test-IwsEnrollmentCredentialRejection",
+    "Test-IwsServiceCommandPathOwned",
     "Get-IwsServiceInstallArguments",
     "Get-IwsServiceLockArguments",
     "Get-IwsServiceControlArguments",

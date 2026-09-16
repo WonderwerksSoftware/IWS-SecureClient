@@ -13,6 +13,7 @@ if ($PlanOnly) {
     Write-Output "PLAN install dedicated IWS WebView2 shell"
     Write-Output "PLAN install disjoint OS firewall boundary"
     Write-Output "PLAN create one IWS Start Menu shortcut"
+    Write-Output "PLAN register normal Windows Installed Apps uninstaller"
     return
 }
 
@@ -21,6 +22,7 @@ $principal = [Security.Principal.WindowsPrincipal]::new($identity)
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw "IWS shell installation requires Administrator approval."
 }
+Write-Output "IWS_SETUP_PHASE=WEBVIEW_SHELL_INSTALLATION"
 
 $bundle = [IO.Path]::GetFullPath($BundleRoot).TrimEnd('\')
 $manifest = Join-Path $bundle "SHELL-MANIFEST.sha256"
@@ -60,7 +62,16 @@ foreach ($file in @(
 )) {
     Copy-Item -LiteralPath (Join-Path $bundle $file) -Destination $clientRoot -Force
 }
+$installerRoot = "C:\Program Files\IWS\Installer"
+New-Item -ItemType Directory -Path $installerRoot -Force | Out-Null
+foreach ($file in @(
+    "IwsUninstall.exe", "Uninstall-IwsClient.ps1", "IwsPrivateTransport.psm1", "pins.psd1"
+)) {
+    Copy-Item -LiteralPath (Join-Path $bundle $file) -Destination $installerRoot -Force
+}
+Write-Output "IWS_SETUP_PHASE=TRUST_INSTALLATION"
 & (Join-Path $clientRoot "Install-IwsProductionTrust.ps1") -CertificatePath (Join-Path $clientRoot "iws-production-root-ca.crt")
+Write-Output "IWS_SETUP_PHASE=WEBVIEW_SHELL_INSTALLATION"
 $runtimeSource = Get-ChildItem -LiteralPath (Join-Path $bundle "WebView2Fixed") `
     -Directory -Filter "Microsoft.WebView2.FixedVersionRuntime.*" |
     Select-Object -First 1
@@ -70,6 +81,7 @@ Copy-Item -Path ($runtimeSource.FullName + "\*") -Destination $installedRuntime 
 
 $removeBoundary = Join-Path $clientRoot "Remove-IwsWebViewBoundary.ps1"
 $setBoundary = Join-Path $clientRoot "Set-IwsWebViewBoundary.ps1"
+Write-Output "IWS_SETUP_PHASE=FIREWALL_BOUNDARY_INSTALLATION"
 & $removeBoundary
 & $setBoundary -ProgramPaths @(
     $installedClient,
@@ -84,4 +96,14 @@ $shortcut.TargetPath = $installedClient
 $shortcut.WorkingDirectory = $clientRoot
 $shortcut.IconLocation = $installedClient + ",0"
 $shortcut.Save()
+$uninstallKey = "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\IWS Secure Client"
+$uninstaller = Join-Path $installerRoot "IwsUninstall.exe"
+New-Item -Path $uninstallKey -Force | Out-Null
+New-ItemProperty -Path $uninstallKey -Name DisplayName -Value "IWS Secure Client" -PropertyType String -Force | Out-Null
+New-ItemProperty -Path $uninstallKey -Name DisplayVersion -Value "1.0.1" -PropertyType String -Force | Out-Null
+New-ItemProperty -Path $uninstallKey -Name Publisher -Value "Impact Wiring Solutions" -PropertyType String -Force | Out-Null
+New-ItemProperty -Path $uninstallKey -Name InstallLocation -Value "C:\Program Files\IWS" -PropertyType String -Force | Out-Null
+New-ItemProperty -Path $uninstallKey -Name UninstallString -Value ('"' + $uninstaller + '"') -PropertyType String -Force | Out-Null
+New-ItemProperty -Path $uninstallKey -Name NoModify -Value 1 -PropertyType DWord -Force | Out-Null
+New-ItemProperty -Path $uninstallKey -Name NoRepair -Value 1 -PropertyType DWord -Force | Out-Null
 Write-Output "IWS_WEBVIEW_SHELL_INSTALLED=yes"

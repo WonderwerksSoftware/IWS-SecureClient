@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 import {createHash} from "node:crypto";
 import {createReadStream} from "node:fs";
-import {chmod, copyFile, lstat, mkdir, mkdtemp, readFile, readdir, rm, stat} from "node:fs/promises";
+import {chmod, copyFile, lstat, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile} from "node:fs/promises";
 import path from "node:path";
 import {spawn} from "node:child_process";
 import {packageWindowsDevice} from "./windows/package-device.mjs";
+import {packageLinuxDevice} from "./linux/package-device.mjs";
+import {readReleaseProvenance, verifyWindowsRelease} from "./release-provenance.mjs";
 
 async function sha256File(file) {
   const digest = createHash("sha256");
@@ -34,6 +36,11 @@ async function runAndroid(request) {
   const source = await mkdtemp(path.join(request.outputDirectory, ".android-source-"));
   try {
     await copyAndroidSource(request.checkpointPath, source);
+    if (request.releaseProvenance) {
+      const assets = path.join(source, "android/app/src/main/assets");
+      await mkdir(assets, {recursive:true, mode:0o700});
+      await writeFile(path.join(assets, "iws-release.json"), JSON.stringify(request.releaseProvenance), {mode:0o600});
+    }
     const builder = path.join(source, "scripts", "build-android-device.sh");
     await new Promise((resolve, reject) => {
       const child = spawn(builder, [], {
@@ -113,6 +120,16 @@ async function main() {
   const requestFile = process.env.IWS_PACKAGE_REQUEST_FILE;
   if (!requestFile) throw new Error("PACKAGE_REQUEST_INVALID");
   const request = await loadRequest(requestFile);
+  const proof = await readReleaseProvenance(request.checkpointPath, request.clientCheckpoint,
+                                          process.env.IWS_RELEASE_SOURCE_COMMIT);
+  if (proof) {
+    request.releaseProvenance = proof;
+    const manifest = JSON.parse(await readFile(request.manifestPath, "utf8"));
+    await writeFile(request.manifestPath, JSON.stringify({...manifest, releaseProvenance:proof}), {mode:0o600});
+    if (request.platform === "WINDOWS") await verifyWindowsRelease(
+      process.env.IWS_WINDOWS_PAYLOAD_ROOT ?? request.checkpointPath,
+      process.env.IWS_WINDOWS_TEMPLATE ?? "", proof);
+  }
   const result = request.platform === "WINDOWS"
     ? await packageWindowsDevice({
         request,
@@ -121,7 +138,9 @@ async function main() {
       })
     : request.platform === "ANDROID"
       ? await runAndroid(request)
-      : (() => { throw new Error("PACKAGE_PLATFORM_INVALID"); })();
+      : ["LINUX_DEBIAN", "LINUX_FEDORA"].includes(request.platform)
+        ? await packageLinuxDevice(request, process.env.IWS_LINUX_TRANSPORT_FILE ?? "", process.env.IWS_LINUX_RPMBUILD_FILE || undefined)
+        : (() => { throw new Error("PACKAGE_PLATFORM_INVALID"); })();
   process.stdout.write(JSON.stringify({...result, sizeBytes: result.sizeBytes.toString()}) + "\n");
 }
 

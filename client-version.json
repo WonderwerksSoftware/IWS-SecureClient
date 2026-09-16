@@ -1,19 +1,25 @@
 {
-  "schemaVersion": 1,
-  "release": "0.1.0-production-rc1",
-  "releaseTag": "secure-client-private-https-rc1-20260909",
+  "schemaVersion": 2,
+  "release": "1.0.1",
+  "releaseTag": "secure-client-v1.0.1",
   "android": {
     "packageIdentity": "com.impactwiring.iwsconnectpoc",
-    "versionCode": 2,
-    "versionName": "0.1-production-rc1",
-    "acceptedCommit": "1de0bad08c0b303999c60f0f3972e71e4f88afa5",
-    "acceptedTag": "android-productization-poc-pass-20260904"
+    "versionCode": 3,
+    "versionName": "1.0.0",
+    "acceptedCommit": "72f019b11ff74a243760e0e572b16ee22d324c0e",
+    "acceptedEvidence": "docs/checkpoints/android-v1-accepted-20260911.md"
   },
   "windows": {
     "packageIdentity": "IWS-Setup",
-    "clientVersion": "0.1.0-production-rc1",
+    "clientVersion": "1.0.1",
     "acceptedCommit": "06151df888320d6f45200aee42e44da162da6b1b",
     "acceptedTag": "windows-productization-poc-pass-20260904"
+  },
+  "linux": {
+    "packageIdentity": "iws-secure-client",
+    "acceptedCommit": "d6e52300ab5d687f67f083554ace994712cdd354",
+    "platforms": ["LINUX_DEBIAN", "LINUX_FEDORA"],
+    "rebootVerification": "USER_DEFERRED"
   },
   "transport": {
     "netbirdVersion": "0.77.1",

@@ -1,0 +1,20 @@
+[Unit]
+Description=IWS private client connectivity
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+UMask=0077
+ExecStartPre=/usr/bin/python3 -I /usr/lib/iws-client/namespace.py prepare
+ExecStart=/usr/bin/python3 -I /usr/lib/iws-client/runtime.py serve
+ExecStopPost=/usr/bin/python3 -I /usr/lib/iws-client/namespace.py remove
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+KillMode=control-group
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target
