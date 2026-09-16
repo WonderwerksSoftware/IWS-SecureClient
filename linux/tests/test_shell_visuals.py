@@ -8,6 +8,11 @@ import shell
 
 
 class ShellVisuals(unittest.TestCase):
+    def test_windows_reference_geometry(self):
+        self.assertEqual(shell.rail_geometry(1018), {
+            'back': (10, 6, 82, 36), 'home': (98, 6, 116, 36),
+            'theme': (820, 8, 94, 32), 'status': (922, 8, 86, 32)})
+
     def test_light_and_dark_styles_are_valid_and_keep_back_readable(self):
         for dark in (False, True):
             with self.subTest(dark=dark):

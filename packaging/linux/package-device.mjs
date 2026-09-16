@@ -61,6 +61,8 @@ export async function packageLinuxDevice(request, transportFile, rpmBuilder = "/
     await source("linux/com.impactwiring.iws-client.policy", "usr/share/polkit-1/actions/com.impactwiring.iws-client.policy");
     await source("linux/iws.desktop", "usr/share/applications/iws.desktop");
     await source("branding/iws-icon-source.svg", "usr/share/icons/hicolor/scalable/apps/iws.svg");
+    for (const mark of ["iws-mark-small.png", "iws-mark-full.png"])
+      await source(`branding/${mark}`, `usr/lib/iws-client/${mark}`);
     await source("windows/webview2/iws-production-root-ca.crt", "usr/lib/iws-client/iws-root-ca.crt");
     await source("third_party/netbird/LICENSE", "usr/share/doc/iws-secure-client/netbird-LICENSE");
     await source("third_party/netbird/NOTICE.md", "usr/share/doc/iws-secure-client/netbird-NOTICE.md");
