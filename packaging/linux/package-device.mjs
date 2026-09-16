@@ -4,7 +4,7 @@ import {spawn} from "node:child_process";
 import path from "node:path";
 
 const HASH = "4eb4d7a2f5fe1a224362c68f6c8129502247635711db1970cc85ed921896780d";
-const PACKAGE_VERSION = "1.0.2";
+const PACKAGE_VERSION = "1.0.3";
 export function linuxPackageScripts() {
   return {
     postInstall: "/usr/bin/python3 -I /usr/lib/iws-client/runtime.py prepare",

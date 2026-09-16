@@ -26,7 +26,7 @@ for (const platform of ["LINUX_DEBIAN", "LINUX_FEDORA"]) {
     const child = spawnSync('dpkg-deb', ['-x', result.artifactPath, extracted]);
     assert.equal(child.status, 0);
     assert.equal(spawnSync('dpkg-deb', ['-e', result.artifactPath, control]).status, 0);
-    assert.match(await readFile(path.join(control, 'control'), 'utf8'), /Version: 1[.]0[.]2-1/);
+    assert.match(await readFile(path.join(control, 'control'), 'utf8'), /Version: 1[.]0[.]3-1/);
     assert.equal((await readFile(path.join(control, 'postinst'), 'utf8')).trim(),
       '#!/bin/sh\nset -eu\n/usr/bin/python3 -I /usr/lib/iws-client/runtime.py prepare');
     assert.equal((await stat(path.join(extracted, 'usr'))).mode & 0o777, 0o755);
@@ -43,7 +43,7 @@ for (const platform of ["LINUX_DEBIAN", "LINUX_FEDORA"]) {
   } else {
     const query = spawnSync('rpm', ['-qp', '--qf', '%{VERSION}', result.artifactPath], {encoding: 'utf8'});
     assert.equal(query.status, 0, query.stderr);
-    assert.equal(query.stdout, '1.0.2');
+    assert.equal(query.stdout, '1.0.3');
     const files = spawnSync('rpm', ['-qlp', result.artifactPath], {encoding: 'utf8'});
     assert.equal(files.status, 0);
     assert.ok(files.stdout.split('\n').includes('/usr/share/icons/hicolor/scalable/apps/iws.svg'));
