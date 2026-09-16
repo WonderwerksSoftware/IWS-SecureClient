@@ -496,6 +496,12 @@ def perform_setup(operation, paths=REAL_PATHS, boundary=None, now=None, expected
             if status['mode'] == 'unknown':
                 raise ValueError('IWS_IDENTITY_UNKNOWN')
             if operation in expected_modes and status['mode'] == 'expired':
+                incoming = _selected_manifest(paths)
+                if incoming:
+                    _value, expiration = _manifest_shape(incoming)
+                    if expiration <= now:
+                        _mark_unusable(paths, incoming, 'expired')
+                _publish_status(paths, now, 'IWS_BOOTSTRAP_UNUSABLE')
                 raise ValueError('IWS_BOOTSTRAP_UNUSABLE')
             raise ValueError('IWS_SETUP_ACTION_INVALID')
         incoming = _selected_manifest(paths)
@@ -550,16 +556,22 @@ def perform_setup(operation, paths=REAL_PATHS, boundary=None, now=None, expected
             _publish_status(paths, now, 'IWS_ENROLLMENT_REJECTED')
             raise
         except Exception as error:
-            if operation == 'replace' and not attempted and archive:
-                _restore_archive(paths, archive)
-                paths.transaction.unlink(missing_ok=True)
+            if not attempted:
                 try:
-                    boundary.run('systemctl', 'start', 'iws-client.service')
-                except Exception:
-                    pass
-            elif operation == 'enroll' and not attempted:
-                shutil.rmtree(paths.state, ignore_errors=True)
-                paths.transaction.unlink(missing_ok=True)
+                    boundary.run('systemctl', 'stop', 'iws-client.service')
+                except Exception as stop_error:
+                    _publish_status(paths, now, 'IWS_ROLLBACK_STOP_FAILED')
+                    raise stop_error from error
+                if operation == 'replace' and archive:
+                    _restore_archive(paths, archive)
+                    paths.transaction.unlink(missing_ok=True)
+                    try:
+                        boundary.run('systemctl', 'start', 'iws-client.service')
+                    except Exception:
+                        pass
+                elif operation == 'enroll':
+                    shutil.rmtree(paths.state, ignore_errors=True)
+                    paths.transaction.unlink(missing_ok=True)
             _publish_status(paths, now, str(error))
             raise
         # This record is the durable proof used by reruns. Write it before the

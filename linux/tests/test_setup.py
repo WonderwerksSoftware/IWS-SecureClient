@@ -32,6 +32,31 @@ class Boundary:
             raise failure
 
 
+class StatefulBoundary(Boundary):
+    def __init__(self, fail_stop_number=None):
+        super().__init__()
+        self.active = False
+        self.stop_count = 0
+        self.fail_stop_number = fail_stop_number
+
+    def run(self, *args, **kwargs):
+        self.calls.append(args)
+        if args[:2] == ("systemctl", "stop"):
+            self.stop_count += 1
+            if self.stop_count == self.fail_stop_number:
+                raise RuntimeError("stop failed")
+            self.active = False
+        elif args[:3] == ("systemctl", "enable", "--now"):
+            self.active = True
+        elif args[:2] == ("systemctl", "start"):
+            self.active = True
+        return ""
+
+    def wait_for_socket(self, _path):
+        self.calls.append(("wait-for-socket",))
+        raise RuntimeError("offline")
+
+
 class LinuxSetup(unittest.TestCase):
     def setUp(self):
         spec = importlib.util.spec_from_file_location("runtime_setup", RUNTIME)
@@ -159,6 +184,31 @@ class LinuxSetup(unittest.TestCase):
         self.assertTrue(self.paths.pending_key("newdevice", 1).is_file())
         self.assertTrue(any(self.paths.archives.iterdir()))
 
+    def test_pre_enrollment_restore_stops_new_daemon_before_touching_state(self):
+        self.current()
+        self.incoming()
+        self.prepare()
+        boundary = StatefulBoundary()
+        with self.assertRaisesRegex(RuntimeError, "offline"):
+            self.runtime.perform_setup("replace", self.paths, boundary, now=NOW)
+        self.assertEqual(boundary.stop_count, 2)
+        self.assertTrue(boundary.active, "the restored original service is started")
+        self.assertEqual(json.loads(self.paths.record.read_text())["deviceId"], "olddevice")
+
+    def test_failed_rollback_stop_preserves_new_state_and_original_archive(self):
+        self.current()
+        self.incoming()
+        self.prepare()
+        boundary = StatefulBoundary(fail_stop_number=2)
+        with self.assertRaisesRegex(RuntimeError, "stop failed"):
+            self.runtime.perform_setup("replace", self.paths, boundary, now=NOW)
+        self.assertFalse(self.paths.record.exists(), "new state is retained without claiming enrollment")
+        self.assertTrue(self.paths.transport.exists())
+        archives = [entry for entry in self.paths.archives.iterdir() if entry.name.startswith("state-")]
+        self.assertEqual(len(archives), 1)
+        self.assertEqual(json.loads((archives[0] / "device.json").read_text())["deviceId"], "olddevice")
+        self.assertTrue(self.paths.pending_key("newdevice", 1).exists())
+
     def test_transient_enrollment_failure_keeps_new_state_key_and_recoverable_archive(self):
         self.current()
         self.incoming()
@@ -223,6 +273,47 @@ class LinuxSetup(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             ui.helper_command("/bin/sh")
+
+    def test_controller_refreshes_to_repair_after_enrollment_restart_failure(self):
+        spec = importlib.util.spec_from_file_location("setup_ui_refresh", SETUP_UI)
+        ui = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ui)
+        self.incoming()
+        self.prepare()
+        initial = ui.view_for(json.loads(self.paths.public_status.read_text()))
+        self.assertEqual(initial["action"], "enroll")
+        boundary = Boundary({("systemctl", "restart"): RuntimeError("restart failed")})
+        with self.assertRaisesRegex(RuntimeError, "restart failed"):
+            self.runtime.perform_setup("enroll", self.paths, boundary, now=NOW)
+        refreshed = ui.refresh_view(lambda: json.loads(self.paths.public_status.read_text()))
+        self.assertEqual(refreshed["action"], "repair")
+        self.assertEqual(refreshed["button"], "Repair existing")
+
+    def test_controller_refreshes_rejected_or_newly_expired_key_to_replacement_guidance(self):
+        spec = importlib.util.spec_from_file_location("setup_ui_expiry", SETUP_UI)
+        ui = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ui)
+        self.incoming()
+        self.prepare()
+        rejected = self.runtime.EnrollmentRejected("invalid setup key")
+        with self.assertRaises(self.runtime.EnrollmentRejected):
+            self.runtime.perform_setup("enroll", self.paths,
+                Boundary({(str(self.paths.transport_binary), "--config"): rejected}), now=NOW)
+        refreshed = ui.refresh_view(lambda: json.loads(self.paths.public_status.read_text()))
+        self.assertIsNone(refreshed["action"])
+        self.assertIn("replacement", refreshed["message"].lower())
+
+        with self.subTest("expires after package preparation"):
+            self.tearDown()
+            self.setUp()
+            self.incoming(self.manifest(expires="2026-09-15T12:30:00Z"))
+            self.prepare()
+            later = datetime(2026, 9, 15, 13, 0, tzinfo=timezone.utc)
+            with self.assertRaisesRegex(ValueError, "IWS_BOOTSTRAP_UNUSABLE"):
+                self.runtime.perform_setup("enroll", self.paths, Boundary(), now=later)
+            refreshed = ui.refresh_view(lambda: json.loads(self.paths.public_status.read_text()))
+            self.assertIsNone(refreshed["action"])
+            self.assertEqual(json.loads(self.paths.public_status.read_text())["mode"], "expired")
 
 
 if __name__ == "__main__":

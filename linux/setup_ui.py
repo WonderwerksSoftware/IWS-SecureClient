@@ -22,7 +22,7 @@ def view_for(status):
         'repair': ('Open or repair IWS', 'The existing IWS registration will be preserved.', 'Repair existing', 'repair', False),
         'replace': ('Replace IWS registration', 'This installer is for a different or newer registration. Replacing it requires explicit confirmation.', 'Replace registration', 'replace', True),
         'replace-retry': ('Finish replacing IWS registration', 'The new registration attempt was interrupted. The previous registration remains recoverable.', 'Retry setup', 'replace', True),
-        'expired': ('Replacement installer required', 'This installer registration has expired or was rejected. Install a new IWS package. Any existing registration remains available.', None, None, False),
+        'expired': ('Replacement installer required', 'This installer registration has expired or was rejected. Install a replacement IWS package. Any existing registration remains available.', None, None, False),
         'conflict': ('Newer IWS registration preserved', 'This installer is older than the existing registration. Install the correct replacement package.', None, None, False),
         'missing-installer': ('Set up IWS', 'Install a current IWS package to begin setup.', None, None, False),
         'unknown': ('IWS needs administrator assistance', 'IWS found transport state without a verified registration record and will not replace it automatically.', None, None, False),
@@ -44,6 +44,11 @@ def read_status():
         return value if isinstance(value, dict) and value.get('schemaVersion') == 1 else {'mode': 'unknown'}
     except (OSError, json.JSONDecodeError):
         return {'mode': 'missing-installer'}
+
+
+def refresh_view(status_reader=read_status):
+    """Re-read root-published status after every privileged helper failure."""
+    return view_for(status_reader())
 
 
 def launch_existing():
@@ -84,6 +89,7 @@ def main():
         launch_existing()
 
     def act(*_args):
+        nonlocal view
         if view['confirm']:
             dialog = Gtk.MessageDialog(transient_for=window, modal=True,
                 message_type=Gtk.MessageType.WARNING, buttons=Gtk.ButtonsType.CANCEL,
@@ -103,21 +109,31 @@ def main():
         if completed.returncode == 0:
             open_iws()
         else:
-            result.set_text('IWS setup did not complete. You can try again or contact an administrator.')
+            view = refresh_view()
+            render(view)
+            result.set_text('IWS setup did not complete. Follow the updated guidance above.')
 
-    if view['canOpen']:
-        button = Gtk.Button(label='Open existing IWS')
-        button.connect('clicked', open_iws)
-        buttons.pack_start(button, False, False, 0)
-    if view['action']:
-        button = Gtk.Button(label=view['button'])
-        button.connect('clicked', act)
-        buttons.pack_end(button, False, False, 0)
+    open_button = Gtk.Button(label='Open existing IWS')
+    open_button.connect('clicked', open_iws)
+    buttons.pack_start(open_button, False, False, 0)
+    action_button = Gtk.Button()
+    action_button.connect('clicked', act)
+    buttons.pack_end(action_button, False, False, 0)
     close = Gtk.Button(label='Close')
     close.connect('clicked', lambda *_: window.destroy())
     buttons.pack_end(close, False, False, 0)
+
+    def render(updated):
+        window.set_title(updated['title'])
+        heading.set_markup(f"<b>{updated['title']}</b>")
+        message.set_text(updated['message'])
+        open_button.set_visible(updated['canOpen'])
+        action_button.set_label(updated['button'] or '')
+        action_button.set_visible(updated['action'] is not None)
+
     window.add(box)
     window.show_all()
+    render(view)
     Gtk.main()
 
 
