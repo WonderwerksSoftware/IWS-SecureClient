@@ -36,11 +36,24 @@ if [ ! -d "$source_root/.git" ]; then
     git clone --filter=blob:none --no-checkout "$NETBIRD_REPOSITORY" "$source_root"
 fi
 git -C "$source_root" fetch --force --tags origin "$NETBIRD_COMMIT"
+# Remove only a previously applied exact repair before refreshing the pin.
+transport_patch=$repo_root/third_party/netbird/patches/android-transport-dns.patch
+if git -C "$source_root" apply --reverse --check "$transport_patch" 2>/dev/null; then
+    git -C "$source_root" apply --reverse "$transport_patch"
+fi
 git -C "$source_root" checkout --detach --force "$NETBIRD_COMMIT"
 [ "$(git -C "$source_root" rev-parse HEAD)" = "$NETBIRD_COMMIT" ]
 [ "$(git -C "$source_root" rev-parse "refs/tags/$NETBIRD_VERSION^{commit}")" = "$NETBIRD_COMMIT" ]
 [ "$(git -C "$source_root" rev-parse "refs/tags/$NETBIRD_VERSION^{tag}")" = "$NETBIRD_TAG_OBJECT" ]
 require_hash "$NETBIRD_GO_MOD_SHA256" "$source_root/go.mod"
+
+# Keep the upstream pin immutable; apply the maintained IWS transport repair.
+transport_patch=$repo_root/third_party/netbird/patches/android-transport-dns.patch
+if ! git -C "$source_root" apply --reverse --check "$transport_patch" 2>/dev/null; then
+    git -C "$source_root" apply --check "$transport_patch"
+    git -C "$source_root" apply "$transport_patch"
+fi
+
 
 jdk_archive=$downloads/jdk11.tar.gz
 download "$JDK11_URL" "$jdk_archive" "$JDK11_SHA256"
@@ -94,10 +107,11 @@ verify_mobile_tool gobind
 
 aar=$output_root/$NETBIRD_AAR_NAME
 (cd "$source_root" && GOFLAGS=-buildvcs=false CGO_ENABLED=0 gomobile bind \
+    -target="${IWS_GOMOBILE_TARGET:-android}" \
     -androidapi="$GOMOBILE_ANDROID_API" \
     -o "$aar" \
     -javapkg=io.netbird.gomobile \
-    -ldflags="-checklinkname=0 -X golang.zx2c4.com/wireguard/ipc.socketDirectory=/data/data/$ANDROID_APPLICATION_ID/cache/wireguard -X github.com/netbirdio/netbird/version.version=$NETBIRD_VERSION-iws-poc" \
+    -ldflags="-checklinkname=0 -X golang.zx2c4.com/wireguard/ipc.socketDirectory=/data/data/$ANDROID_APPLICATION_ID/cache/wireguard -X github.com/netbirdio/netbird/version.version=$NETBIRD_VERSION-iws-dns-recovery" \
     ./client/android)
 actual_aar_hash=$(sha256sum "$aar" | awk '{print $1}')
 printf '%s  %s\n' "$actual_aar_hash" "$aar" \

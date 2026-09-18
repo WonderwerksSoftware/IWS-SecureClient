@@ -29,7 +29,14 @@ def bootstrapSetupKey = deviceBuildProperties.getProperty('iwsBootstrapSetupKey'
 def bootstrapHostname = deviceBuildProperties.getProperty('iwsBootstrapHostname', '')
 def signerPropertiesPath = deviceBuildProperties.getProperty('iwsSignerPropertiesFile', '')
 def releaseRequested = gradle.startParameter.taskNames.any { it.toLowerCase().contains('release') }
-if (releaseRequested && signerPropertiesPath.isEmpty()) {
+// Maintenance updates carry no enrollment material and are signed with the
+// existing production key in place after verification; keys never leave it.
+def unsignedMaintenance = System.getenv('IWS_ANDROID_UNSIGNED_MAINTENANCE') == '1'
+if (unsignedMaintenance && (!bootstrapSetupKey.isEmpty() || !bootstrapHostname.isEmpty()
+        || !signerPropertiesPath.isEmpty())) {
+    throw new GradleException('Unsigned maintenance builds must contain no bootstrap or signer inputs')
+}
+if (releaseRequested && signerPropertiesPath.isEmpty() && !unsignedMaintenance) {
     throw new GradleException('IWS release builds require explicit signer properties')
 }
 def signerProperties = new Properties()
@@ -61,8 +68,8 @@ android {
         applicationId 'com.impactwiring.iwsconnectpoc'
         minSdk 26
         targetSdk 36
-        versionCode 3
-        versionName '1.0.0'
+        versionCode 4
+        versionName '1.0.1'
         buildConfigField 'String', 'EXPECTED_OVERLAY_CIDR', buildConfigString(expectedOverlay)
         buildConfigField 'String', 'PROHIBITED_CIDRS', buildConfigString(prohibitedCidrs)
         buildConfigField 'String', 'TEST_ENDPOINT_URL', buildConfigString(testEndpointUrl)

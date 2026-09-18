@@ -521,7 +521,13 @@ public final class MainActivity extends Activity implements
         cancelNativeNavigationPreparation();
         documentCoordinator.invalidatePending();
         readinessCoordinator.onManualRetry();
-        requestVpnPermission();
+        if (bound && service.hasPeerIdentity()
+                && VpnService.prepare(this) == null) {
+            startForegroundService(new Intent(this, IwsVpnService.class)
+                    .setAction(IwsVpnService.ACTION_RETRY));
+        } else {
+            requestVpnPermission();
+        }
     }
 
     private void navigateBack() {
