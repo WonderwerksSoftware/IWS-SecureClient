@@ -9,6 +9,15 @@ import android.content.pm.ServiceInfo;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
+import android.net.LinkProperties;
+import android.net.NetworkRequest;
+import android.os.ParcelFileDescriptor;
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.HashSet;
+import java.util.Set;
 import android.os.Binder;
 import android.os.Build;
 import android.os.Handler;
@@ -19,7 +28,6 @@ import java.net.URI;
 import java.net.URL;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import io.netbird.gomobile.android.Android;
 import io.netbird.gomobile.android.Auth;
 import io.netbird.gomobile.android.Client;
@@ -32,6 +40,8 @@ import io.netbird.gomobile.android.Preferences;
 public final class IwsVpnService extends android.net.VpnService {
     public static final String ACTION_CONNECT =
             "com.impactwiring.iwsconnectpoc.action.CONNECT";
+    public static final String ACTION_RETRY =
+            "com.impactwiring.iwsconnectpoc.action.RETRY";
     public static final String ACTION_DISCONNECT =
             "com.impactwiring.iwsconnectpoc.action.DISCONNECT";
 
@@ -52,6 +62,23 @@ public final class IwsVpnService extends android.net.VpnService {
     private final LocalBinder binder = new LocalBinder();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService engineExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService stopExecutor = Executors.newSingleThreadExecutor();
+    private final EngineRecovery recovery = new EngineRecovery();
+    private final Object networkLock = new Object();
+    private final Set<Network> lostNetworks = new HashSet<>();
+    private volatile Network physicalNetwork;
+    private List<String> physicalDns = new ArrayList<>();
+    private ConnectivityManager connectivity;
+    private boolean networkCallbackRegistered;
+    private volatile boolean destroyed;
+    private final Runnable recoveryDeadline = () -> {
+        synchronized (IwsVpnService.this) {
+            if (recovery.timeout()) {
+                emitTransport(TransportState.ERROR);
+                emitMessage("IWS recovery is waiting for connectivity to stop. Please retry shortly.");
+            }
+        }
+    };
     private final ExecutorService probeExecutor = Executors.newSingleThreadExecutor();
 
     private volatile Observer observer;
@@ -59,7 +86,6 @@ public final class IwsVpnService extends android.net.VpnService {
     private volatile String endpointState = "UNKNOWN";
     private volatile Client client;
     private volatile Client preparedClient;
-    private volatile Future<?> engineFuture;
     private volatile boolean stopping;
 
     private AndroidPlatformFiles platformFiles;
@@ -75,6 +101,15 @@ public final class IwsVpnService extends android.net.VpnService {
         super.onCreate();
         platformFiles = new AndroidPlatformFiles(this);
         createNotificationChannel();
+        connectivity = getSystemService(ConnectivityManager.class);
+        if (connectivity != null) {
+            connectivity.registerNetworkCallback(new NetworkRequest.Builder()
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                    .build(), physicalNetworkCallback);
+            networkCallbackRegistered = true;
+        }
+        refreshPhysicalNetwork(null, false, false);
     }
 
     @Override
@@ -83,11 +118,14 @@ public final class IwsVpnService extends android.net.VpnService {
     }
 
     @Override
-    public int onStartCommand(Intent intent, int flags, int startId) {
+    public synchronized int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? null : intent.getAction();
         if (ACTION_CONNECT.equals(action)) {
-            startForegroundForState(TransportState.CONNECTING);
+            startForegroundForState(recovery.isRunning() ? transportState : TransportState.CONNECTING);
             connect();
+        } else if (ACTION_RETRY.equals(action)) {
+            startForegroundForState(TransportState.CONNECTING);
+            retry();
         } else if (ACTION_DISCONNECT.equals(action)) {
             disconnect();
         }
@@ -101,8 +139,14 @@ public final class IwsVpnService extends android.net.VpnService {
 
     @Override
     public void onDestroy() {
+        destroyed = true;
+        if (networkCallbackRegistered) {
+            connectivity.unregisterNetworkCallback(physicalNetworkCallback);
+            networkCallbackRegistered = false;
+        }
         disconnect();
-        engineExecutor.shutdownNow();
+        engineExecutor.shutdown();
+        stopExecutor.shutdown();
         probeExecutor.shutdownNow();
         super.onDestroy();
     }
@@ -124,7 +168,7 @@ public final class IwsVpnService extends android.net.VpnService {
     }
 
     synchronized void connect() {
-        if (engineFuture != null && !engineFuture.isDone()) {
+        if (destroyed || !recovery.start()) {
             return;
         }
         stopping = false;
@@ -132,8 +176,10 @@ public final class IwsVpnService extends android.net.VpnService {
         emitEndpoint();
         emitTransport(TransportState.CONNECTING);
 
-        engineFuture = engineExecutor.submit(() -> {
+        engineExecutor.submit(() -> {
             try {
+                if (stopping) return;
+                initializeTransportDns();
                 configureFailClosedPreferences();
                 EnvList environment = Android.newEnvList();
                 environment.put(Android.getEnvKeyNBForceRelay(), "true");
@@ -142,12 +188,16 @@ public final class IwsVpnService extends android.net.VpnService {
                 if (nativeClient == null) {
                     nativeClient = newNativeClient();
                 }
-                client = nativeClient;
+                synchronized (IwsVpnService.this) {
+                    if (stopping) return;
+                    client = nativeClient;
+                }
                 nativeClient.setConnectionListener(connectionListener);
-                nativeClient.setNetworkAvailable(hasUsableNetwork());
+                DNSList hostDns = initializeTransportDns();
+                nativeClient.setNetworkAvailable(physicalNetwork != null);
                 nativeClient.runWithoutLogin(
                         platformFiles,
-                        new DNSList(),
+                        hostDns,
                         () -> {},
                         environment);
                 if (!stopping && transportState != TransportState.DISCONNECTED) {
@@ -163,15 +213,37 @@ public final class IwsVpnService extends android.net.VpnService {
                 if (finished != null) {
                     finished.removeConnectionListener();
                 }
-                client = null;
-                if (stopping) {
-                    emitTransport(TransportState.DISCONNECTED);
+                synchronized (IwsVpnService.this) {
+                    client = null;
+                    mainHandler.removeCallbacks(recoveryDeadline);
+                    boolean restart = recovery.finished();
+                    if (restart && !destroyed) connect();
+                    else if (stopping) emitTransport(TransportState.DISCONNECTED);
                 }
             }
         });
     }
 
+    synchronized void retry() {
+        if (destroyed) return;
+        if (!recovery.isRunning()) {
+            connect();
+            return;
+        }
+        if (!recovery.retry()) return;
+        stopping = true;
+        emitTransport(TransportState.CONNECTING);
+        mainHandler.postDelayed(recoveryDeadline, 15000);
+        requestNativeStop(client);
+    }
+
+    private void requestNativeStop(Client nativeClient) {
+        if (nativeClient != null) stopExecutor.execute(nativeClient::stop);
+    }
+
     synchronized void disconnect() {
+        recovery.cancel();
+        mainHandler.removeCallbacks(recoveryDeadline);
         stopping = true;
         Client nativeClient = client;
         if (nativeClient == null) {
@@ -180,7 +252,7 @@ public final class IwsVpnService extends android.net.VpnService {
             return;
         }
         emitTransport(TransportState.DISCONNECTING);
-        nativeClient.stop();
+        requestNativeStop(nativeClient);
         emitTransport(TransportState.DISCONNECTED);
         stopForeground(STOP_FOREGROUND_REMOVE);
     }
@@ -192,6 +264,7 @@ public final class IwsVpnService extends android.net.VpnService {
 
     void enroll(String managementUrl, String setupKey, String hostname, EnrollmentCallback callback) {
         try {
+            initializeTransportDns();
             configureFailClosedPreferences();
             EnrollmentOrder.protectThenAuthenticate(
                     this::prepareNativeClientForProtectedSockets,
@@ -273,40 +346,130 @@ public final class IwsVpnService extends android.net.VpnService {
         preferences.commit();
     }
 
-    private boolean hasUsableNetwork() {
-        ConnectivityManager manager = getSystemService(ConnectivityManager.class);
-        Network network = manager == null ? null : manager.getActiveNetwork();
-        NetworkCapabilities capabilities =
-                manager == null || network == null ? null : manager.getNetworkCapabilities(network);
-        return capabilities != null
-                && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
+    private final ConnectivityManager.NetworkCallback physicalNetworkCallback =
+            new ConnectivityManager.NetworkCallback() {
+        @Override public void onAvailable(Network network) { refreshPhysicalNetwork(network, false, false); }
+        @Override public void onLost(Network network) { refreshPhysicalNetwork(network, true, false); }
+        @Override public void onCapabilitiesChanged(Network network, NetworkCapabilities capabilities) {
+            refreshPhysicalNetwork(null, false, false);
+        }
+        @Override public void onLinkPropertiesChanged(Network network, LinkProperties properties) {
+            refreshPhysicalNetwork(null, false, network.equals(physicalNetwork));
+        }
+    };
+
+    private List<String> ipv4Dns(Network network) {
+        List<String> result = new ArrayList<>();
+        LinkProperties properties = connectivity.getLinkProperties(network);
+        if (properties != null) {
+            for (InetAddress address : properties.getDnsServers()) {
+                if (address instanceof Inet4Address) result.add(address.getHostAddress());
+            }
+        }
+        return result;
+    }
+
+    private DNSList initializeTransportDns() throws Exception {
+        synchronized (networkLock) {
+            DNSList dns = new DNSList();
+            for (String address : physicalDns) dns.add(address);
+            Android.setTransportDNS(dns);
+            return dns;
+        }
+    }
+
+    private void refreshPhysicalNetwork(Network eventNetwork, boolean lost, boolean linkChanged) {
+        synchronized (networkLock) {
+            if (destroyed || connectivity == null) return;
+            if (eventNetwork != null) {
+                if (lost) lostNetworks.add(eventNetwork);
+                else lostNetworks.remove(eventNetwork);
+            }
+            Network[] networks = connectivity.getAllNetworks();
+            lostNetworks.retainAll(java.util.Arrays.asList(networks));
+            List<PhysicalNetworkChoice.Candidate> candidates = new ArrayList<>();
+            Integer current = null;
+            for (int i = 0; i < networks.length; i++) {
+                Network network = networks[i];
+                if (network.equals(physicalNetwork)) current = i;
+                NetworkCapabilities caps = connectivity.getNetworkCapabilities(network);
+                if (caps == null || lostNetworks.contains(network)) continue;
+                candidates.add(new PhysicalNetworkChoice.Candidate(i,
+                        caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN),
+                        caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET),
+                        !ipv4Dns(network).isEmpty(),
+                        caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)));
+            }
+            Integer selected = PhysicalNetworkChoice.choose(candidates, current);
+            Network next = selected == null ? null : networks[selected];
+            List<String> dns = next == null ? new ArrayList<>() : ipv4Dns(next);
+            boolean changed = linkChanged || !java.util.Objects.equals(next, physicalNetwork) || !dns.equals(physicalDns);
+            physicalNetwork = next;
+            physicalDns = dns;
+            try {
+                initializeTransportDns();
+                setUnderlyingNetworks(next == null ? new Network[0] : new Network[] {next});
+                Client active = client;
+                if (active != null) {
+                    // The VPN DNS server is private and DNS management is disabled.
+                    // Only the Go transport resolver consumes physical DNS updates.
+                    active.setNetworkAvailable(next != null);
+                    if (changed) active.notifyNetworkChange();
+                }
+            } catch (Exception error) {
+                physicalNetwork = null;
+                physicalDns = new ArrayList<>();
+                try { Android.setTransportDNS(new DNSList()); } catch (Exception ignored) {}
+                try { setUnderlyingNetworks(new Network[0]); } catch (Exception ignored) {}
+                Client active = client;
+                if (active != null) active.setNetworkAvailable(false);
+                emitMessage("IWS is waiting for a usable physical network.");
+            }
+        }
+    }
+
+    boolean protectTransportSocket(int fd) {
+        Network network = physicalNetwork;
+        if (network == null || !protect(fd)) return false;
+        // fromFd duplicates the descriptor; closing it must never close Go's original socket.
+        try (ParcelFileDescriptor duplicate = ParcelFileDescriptor.fromFd(fd)) {
+            network.bindSocket(duplicate.getFileDescriptor());
+            return true;
+        } catch (Exception error) {
+            return false;
+        }
     }
 
     private final ConnectionListener connectionListener = new ConnectionListener() {
         @Override
         public void onStateChanged(long state) {
-            emitTransport(TransportStateMapper.fromNative(state));
+            emitNativeTransport(TransportStateMapper.fromNative(state));
         }
 
         @Override public void onConnected() {
-            emitTransport(TransportState.CONNECTED);
+            emitNativeTransport(TransportState.CONNECTED);
         }
         @Override public void onDisconnected() {
-            emitTransport(TransportState.DISCONNECTED);
+            emitNativeTransport(TransportState.DISCONNECTED);
         }
         @Override public void onConnecting() {
-            emitTransport(TransportState.CONNECTING);
+            emitNativeTransport(TransportState.CONNECTING);
         }
         @Override public void onDisconnecting() {
-            emitTransport(TransportState.DISCONNECTING);
+            emitNativeTransport(TransportState.DISCONNECTING);
         }
         @Override public void onAddressChanged(String ignoredV4, String ignoredV6) {}
         @Override public void onPeersListChanged(long ignoredCount) {}
     };
 
+    private synchronized void emitNativeTransport(TransportState state) {
+        if (!stopping && !destroyed) emitTransport(state);
+    }
+
     private void emitTransport(TransportState state) {
         transportState = state;
         mainHandler.post(() -> {
+            if (destroyed) return;
             updateNotification();
             Observer current = observer;
             if (current != null) {

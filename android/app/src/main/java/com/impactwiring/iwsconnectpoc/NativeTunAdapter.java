@@ -50,7 +50,7 @@ final class NativeTunAdapter implements TunAdapter {
 
     @Override
     public boolean protectSocket(int fd) {
-        return service.protect(fd);
+        return service.protectTransportSocket(fd);
     }
 
     @Override

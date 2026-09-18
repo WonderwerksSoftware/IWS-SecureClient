@@ -1,0 +1,459 @@
+diff --git a/client/android/client.go b/client/android/client.go
+index 7eea83d..2063965 100644
+--- a/client/android/client.go
++++ b/client/android/client.go
+@@ -77,8 +77,7 @@ type Client struct {
+ 	tunAdapter            device.TunAdapter
+ 	iFaceDiscover         IFaceDiscover
+ 	recorder              *peer.Status
+-	ctxCancel             context.CancelFunc
+-	ctxCancelLock         *sync.Mutex
++	runCancellation       runCancellation
+ 	deviceName            string
+ 	uiVersion             string
+ 	networkChangeListener listener.NetworkChangeListener
+@@ -159,7 +158,6 @@ func NewClient(androidSDKVersion int, deviceName string, uiVersion string, tunAd
+ 		tunAdapter:            tunAdapter,
+ 		iFaceDiscover:         iFaceDiscover,
+ 		recorder:              peer.NewRecorder(""),
+-		ctxCancelLock:         &sync.Mutex{},
+ 		networkChangeListener: networkChangeListener,
+ 		netState:              netstate.New(),
+ 		sweeper:               netsweep.New(),
+@@ -191,10 +189,12 @@ func (c *Client) Run(platformFiles PlatformFiles, urlOpener URLOpener, isAndroid
+ 	//nolint
+ 	ctxWithValues = context.WithValue(ctxWithValues, system.UiVersionCtxKey, c.uiVersion)
+ 
+-	c.ctxCancelLock.Lock()
+-	ctx, c.ctxCancel = context.WithCancel(ctxWithValues)
+-	defer c.ctxCancel()
+-	c.ctxCancelLock.Unlock()
++	var cancel context.CancelFunc
++	ctx, cancel = c.runCancellation.begin(ctxWithValues)
++	defer cancel()
++	if err := ctx.Err(); err != nil {
++		return err
++	}
+ 
+ 	auth := NewAuthWithConfig(ctx, cfg, cfgFile)
+ 	err = auth.login(urlOpener, isAndroidTV)
+@@ -238,10 +238,12 @@ func (c *Client) RunWithoutLogin(platformFiles PlatformFiles, dns *DNSList, dnsR
+ 	var ctx context.Context
+ 	//nolint
+ 	ctxWithValues := context.WithValue(context.Background(), system.DeviceNameCtxKey, c.deviceName)
+-	c.ctxCancelLock.Lock()
+-	ctx, c.ctxCancel = context.WithCancel(ctxWithValues)
+-	defer c.ctxCancel()
+-	c.ctxCancelLock.Unlock()
++	var cancel context.CancelFunc
++	ctx, cancel = c.runCancellation.begin(ctxWithValues)
++	defer cancel()
++	if err := ctx.Err(); err != nil {
++		return err
++	}
+ 
+ 	// todo do not throw error in case of cancelled context
+ 	ctx = internal.CtxInitState(ctx)
+@@ -253,13 +255,7 @@ func (c *Client) RunWithoutLogin(platformFiles PlatformFiles, dns *DNSList, dnsR
+ 
+ // Stop the internal client and free the resources
+ func (c *Client) Stop() {
+-	c.ctxCancelLock.Lock()
+-	defer c.ctxCancelLock.Unlock()
+-	if c.ctxCancel == nil {
+-		return
+-	}
+-
+-	c.ctxCancel()
++	c.runCancellation.stop()
+ }
+ 
+ func (c *Client) RenewTun(fd int) error {
+diff --git a/client/android/run_cancellation.go b/client/android/run_cancellation.go
+new file mode 100644
+index 0000000..d47b67f
+--- /dev/null
++++ b/client/android/run_cancellation.go
+@@ -0,0 +1,32 @@
++package android
++
++import (
++	"context"
++	"sync"
++)
++
++// runCancellation belongs to one native Client instance.
++type runCancellation struct {
++	mu      sync.Mutex
++	cancel  context.CancelFunc
++	stopped bool
++}
++
++func (r *runCancellation) begin(parent context.Context) (context.Context, context.CancelFunc) {
++	r.mu.Lock()
++	defer r.mu.Unlock()
++	ctx, cancel := context.WithCancel(parent)
++	r.cancel = cancel
++	if r.stopped {
++		cancel()
++	}
++	return ctx, cancel
++}
++func (r *runCancellation) stop() {
++	r.mu.Lock()
++	defer r.mu.Unlock()
++	r.stopped = true
++	if r.cancel != nil {
++		r.cancel()
++	}
++}
+diff --git a/client/android/run_cancellation_test.go b/client/android/run_cancellation_test.go
+new file mode 100644
+index 0000000..755becc
+--- /dev/null
++++ b/client/android/run_cancellation_test.go
+@@ -0,0 +1,35 @@
++package android
++
++import (
++	"context"
++	"testing"
++)
++
++func TestStopBeforeRunIsRetained(t *testing.T) {
++	var control runCancellation
++	control.stop()
++	ctx, cancel := control.begin(context.Background())
++	defer cancel()
++	if ctx.Err() != context.Canceled {
++		t.Fatal("Stop before native initialization was lost")
++	}
++}
++func TestStopCancelsRunningAndFreshClientRemainsUsable(t *testing.T) {
++	var control runCancellation
++	ctx, cancel := control.begin(context.Background())
++	defer cancel()
++	if ctx.Err() != nil {
++		t.Fatal(ctx.Err())
++	}
++	control.stop()
++	control.stop()
++	if ctx.Err() != context.Canceled {
++		t.Fatal("running engine was not cancelled")
++	}
++	var fresh runCancellation
++	next, done := fresh.begin(context.Background())
++	defer done()
++	if next.Err() != nil {
++		t.Fatal("new client inherited old stop")
++	}
++}
+diff --git a/client/android/transport_dns.go b/client/android/transport_dns.go
+new file mode 100644
+index 0000000..8f7b5ed
+--- /dev/null
++++ b/client/android/transport_dns.go
+@@ -0,0 +1,18 @@
++//go:build android
++
++package android
++
++import nbnet "github.com/netbirdio/netbird/client/net"
++
++// SetTransportDNS supplies only DNS servers from a currently usable NOT_VPN
++// Android network. Empty input prevents native DNS until an underlay returns.
++func SetTransportDNS(servers *DNSList) error {
++	if servers == nil {
++		return nbnet.SetTransportDNS(nil)
++	}
++	values := make([]string, 0, len(servers.items))
++	for _, server := range servers.items {
++		values = append(values, server.Addr().String())
++	}
++	return nbnet.SetTransportDNS(values)
++}
+diff --git a/client/net/transport_dns_android.go b/client/net/transport_dns_android.go
+new file mode 100644
+index 0000000..fe5341f
+--- /dev/null
++++ b/client/net/transport_dns_android.go
+@@ -0,0 +1,25 @@
++//go:build android
++
++package net
++
++import (
++	"net"
++	"sync"
++	"time"
++
++	"github.com/netbirdio/netbird/client/net/transportdns"
++)
++
++var transportDNS = transportdns.New((&net.Dialer{
++	Control: ControlProtectSocket,
++	Timeout: 5 * time.Second,
++}).DialContext)
++var transportDNSOnce sync.Once
++
++// SetTransportDNS must first be called before starting native authentication or
++// the engine. Later calls update the synchronized physical-network DNS snapshot.
++// Only Go-native resolution changes; Android/WebView private DNS is untouched.
++func SetTransportDNS(servers []string) error {
++	transportDNSOnce.Do(func() { net.DefaultResolver = transportDNS.Resolver() })
++	return transportDNS.SetServers(servers)
++}
+diff --git a/client/net/transportdns/resolver.go b/client/net/transportdns/resolver.go
+new file mode 100644
+index 0000000..1049b75
+--- /dev/null
++++ b/client/net/transportdns/resolver.go
+@@ -0,0 +1,74 @@
++// Package transportdns keeps native transport lookups independent of the app VPN.
++package transportdns
++
++import (
++	"context"
++	"errors"
++	"net"
++	"sync"
++)
++
++type DialFunc func(context.Context, string, string) (net.Conn, error)
++
++type Manager struct {
++	mu       sync.Mutex
++	servers  []string
++	next     uint64
++	dial     DialFunc
++	resolver *net.Resolver
++}
++
++// New requires a dial function that protects and binds each DNS socket to the
++// selected physical network. There is deliberately no system/public fallback.
++func New(dial DialFunc) *Manager {
++	m := &Manager{dial: dial}
++	m.resolver = &net.Resolver{PreferGo: true, Dial: m.dialDNS}
++	return m
++}
++
++func (m *Manager) Resolver() *net.Resolver { return m.resolver }
++
++// SetServers replaces the physical-network DNS snapshot. Invalid/empty input
++// clears old servers so a stale network can never be used as a fallback.
++func (m *Manager) SetServers(servers []string) error {
++	var validated []string
++	var validationError error
++	for _, value := range servers {
++		ip := net.ParseIP(value)
++		if ip == nil || ip.To4() == nil || ip.IsLoopback() || ip.IsUnspecified() || ip.IsMulticast() {
++			validationError = errors.New("invalid physical IPv4 DNS resolver")
++			validated = nil
++			break
++		}
++		normalized := ip.String()
++		found := false
++		for _, existing := range validated {
++			if existing == normalized {
++				found = true
++				break
++			}
++		}
++		if !found {
++			validated = append(validated, normalized)
++		}
++	}
++	m.mu.Lock()
++	m.servers = validated
++	m.next = 0
++	m.mu.Unlock()
++	return validationError
++}
++
++func (m *Manager) dialDNS(ctx context.Context, network, _ string) (net.Conn, error) {
++	m.mu.Lock()
++	if len(m.servers) == 0 {
++		m.mu.Unlock()
++		return nil, errors.New("physical network DNS unavailable")
++	}
++	server := m.servers[m.next%uint64(len(m.servers))]
++	m.next++
++	m.mu.Unlock()
++	// Resolver's address argument comes from system resolver configuration, which
++	// belongs to the IWS VPN on Android. Only the physical snapshot is admitted.
++	return m.dial(ctx, network, net.JoinHostPort(server, "53"))
++}
+diff --git a/client/net/transportdns/resolver_test.go b/client/net/transportdns/resolver_test.go
+new file mode 100644
+index 0000000..f2969d4
+--- /dev/null
++++ b/client/net/transportdns/resolver_test.go
+@@ -0,0 +1,168 @@
++package transportdns
++
++import (
++	"context"
++	"encoding/binary"
++	"errors"
++	"fmt"
++	"net"
++	"strings"
++	"sync"
++	"syscall"
++	"testing"
++	"time"
++)
++
++// A local DNS fixture answers A questions without consulting host/public DNS.
++func dnsFixture(t *testing.T) string {
++	t.Helper()
++	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { conn.Close() })
++	go func() {
++		buf := make([]byte, 1500)
++		for {
++			n, from, err := conn.ReadFrom(buf)
++			if err != nil {
++				return
++			}
++			q := append([]byte(nil), buf[:n]...)
++			if n < 17 {
++				continue
++			}
++			end := 12
++			for end < n && q[end] != 0 {
++				end += int(q[end]) + 1
++			}
++			if end+5 > n {
++				continue
++			}
++			kind := binary.BigEndian.Uint16(q[end+1 : end+3])
++			answer := append([]byte(nil), q[:end+5]...)
++			binary.BigEndian.PutUint16(answer[2:4], 0x8180)
++			if kind == 1 {
++				binary.BigEndian.PutUint16(answer[6:8], 1)
++				answer = append(answer, 0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 1, 0, 4, 192, 0, 2, 123)
++			}
++			conn.WriteTo(answer, from)
++		}
++	}()
++	return conn.LocalAddr().String()
++}
++
++func TestLookupUsesSelectedPhysicalDNSAndTracksReplacement(t *testing.T) {
++	fixture := dnsFixture(t)
++	var mu sync.Mutex
++	var targets []string
++	manager := New(func(ctx context.Context, network, target string) (net.Conn, error) {
++		mu.Lock()
++		targets = append(targets, target)
++		mu.Unlock()
++		return (&net.Dialer{}).DialContext(ctx, network, fixture)
++	})
++	for _, server := range []string{"192.0.2.53", "198.51.100.53"} {
++		if err := manager.SetServers([]string{server}); err != nil {
++			t.Fatal(err)
++		}
++		mu.Lock()
++		targets = nil
++		mu.Unlock()
++		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
++		ips, err := manager.Resolver().LookupIP(ctx, "ip4", "relay.fixture.invalid")
++		cancel()
++		if err != nil || len(ips) != 1 || ips[0].String() != "192.0.2.123" {
++			t.Fatalf("lookup: %v %v", ips, err)
++		}
++		mu.Lock()
++		if len(targets) == 0 {
++			t.Error("physical resolver never dialed")
++		}
++		for _, target := range targets {
++			if target != net.JoinHostPort(server, "53") {
++				t.Errorf("stale/default resolver %s", target)
++			}
++		}
++		mu.Unlock()
++	}
++}
++
++func TestMissingOrLostPhysicalDNSNeverFallsBack(t *testing.T) {
++	calls := 0
++	manager := New(func(context.Context, string, string) (net.Conn, error) {
++		calls++
++		return nil, errors.New("must not dial")
++	})
++	for _, servers := range [][]string{nil, {}} {
++		if err := manager.SetServers(servers); err != nil {
++			t.Fatal(err)
++		}
++		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
++		_, err := manager.Resolver().LookupIP(ctx, "ip4", "relay.fixture.invalid")
++		cancel()
++		if err == nil {
++			t.Fatal("DNS unexpectedly succeeded without physical network")
++		}
++	}
++	if calls != 0 {
++		t.Fatalf("default resolver dialed %d times", calls)
++	}
++}
++
++func TestInvalidResolversFailClosed(t *testing.T) {
++	manager := New(func(context.Context, string, string) (net.Conn, error) { return nil, errors.New("not connected") })
++	for _, server := range []string{"relay.netbird.io", "127.0.0.1", "0.0.0.0", "224.0.0.1", "::1", "192.0.2.53:53"} {
++		if manager.SetServers([]string{server}) == nil {
++			t.Errorf("accepted %s", server)
++		}
++	}
++}
++
++func TestProtectionFailureCannotUseUnprotectedFallback(t *testing.T) {
++	calls := 0
++	manager := New(func(context.Context, string, string) (net.Conn, error) {
++		calls++
++		return nil, fmt.Errorf("socket protection refused")
++	})
++	if err := manager.SetServers([]string{"192.0.2.53"}); err != nil {
++		t.Fatal(err)
++	}
++	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
++	defer cancel()
++	_, err := manager.Resolver().LookupIP(ctx, "ip4", "relay.fixture.invalid")
++	if err == nil || !strings.Contains(err.Error(), "socket protection refused") || calls == 0 {
++		t.Fatalf("missing protected failure: %v calls=%d", err, calls)
++	}
++}
++
++func TestDefaultResolverCoversDirectUDPAndDataDialerLookups(t *testing.T) {
++	fixture := dnsFixture(t)
++	manager := New(func(ctx context.Context, network, target string) (net.Conn, error) {
++		return (&net.Dialer{}).DialContext(ctx, network, fixture)
++	})
++	if err := manager.SetServers([]string{"192.0.2.53"}); err != nil {
++		t.Fatal(err)
++	}
++	previous := net.DefaultResolver
++	net.DefaultResolver = manager.Resolver()
++	defer func() { net.DefaultResolver = previous }()
++	address, err := net.ResolveUDPAddr("udp4", "relay.fixture.invalid:443")
++	if err != nil || address.IP.String() != "192.0.2.123" {
++		t.Fatalf("direct QUIC lookup: %v %v", address, err)
++	}
++	protected := false
++	dialer := net.Dialer{Control: func(network, address string, c syscall.RawConn) error {
++		protected = true
++		if address != "192.0.2.123:443" {
++			t.Errorf("unexpected resolved destination %s", address)
++		}
++		return errors.New("fixture stops before network connection")
++	}}
++	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
++	defer cancel()
++	_, err = dialer.DialContext(ctx, "tcp4", "signal.fixture.invalid:443")
++	if err == nil || !protected {
++		t.Fatalf("data socket protection not reached after DNS: %v", err)
++	}
++}
