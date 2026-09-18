@@ -324,6 +324,41 @@ def transport_args():
             '--daemon-addr', SOCKET, '--log-file', str(STATE / 'transport/client.log'),
             '--log-level', 'error']
 
+def _private_etc(resolver, browser):
+    # A file bind on the host's /etc/resolv.conf (or its symlink target) can
+    # disappear when the host atomically replaces that directory entry.
+    # Give this mount namespace its own /etc entries. Keep unrelated config
+    # accessible through bind mounts; copy only the fixed IWS resolver policy.
+    overrides = {
+        'resolv.conf': resolver.read_bytes(),
+        'nsswitch.conf': (RUN / 'nsswitch.conf').read_bytes(),
+    }
+    if browser:
+        overrides['hosts'] = (RUN / 'browser-hosts').read_bytes()
+    original = os.open('/etc', os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    try:
+        source = Path(f'/proc/{os.getpid()}/fd/{original}')
+        entries = list(source.iterdir())
+        run('mount', '-t', 'tmpfs', '-o', 'mode=755,nosuid,nodev', 'iws-private-etc', '/etc')
+        for entry in entries:
+            if entry.name in overrides:
+                continue
+            target = Path('/etc') / entry.name
+            if entry.is_symlink():
+                target.symlink_to(os.readlink(entry))
+            elif entry.is_dir():
+                target.mkdir()
+                run('mount', '--no-canonicalize', '--rbind', str(entry), str(target))
+            else:
+                target.touch()
+                run('mount', '--no-canonicalize', '--bind', str(entry), str(target))
+        for name, content in overrides.items():
+            target = Path('/etc') / name
+            target.write_bytes(content)
+            target.chmod(0o444)
+    finally:
+        os.close(original)
+
 def enter_namespace(browser=False):
     libc = ctypes.CDLL(None, use_errno=True)
     if libc.unshare(0x00020000) != 0:  # CLONE_NEWNS; supports Python 3.11 too
@@ -333,10 +368,7 @@ def enter_namespace(browser=False):
         if libc.setns(net.fileno(), 0x40000000) != 0:  # CLONE_NEWNET
             raise ValueError('IWS_NETWORK_NAMESPACE_FAILED')
     resolver = RUN / ('browser-resolv.conf' if browser else 'control-resolv.conf')
-    run('mount', '--bind', str(resolver), '/etc/resolv.conf')
-    run('mount', '--bind', str(RUN / 'nsswitch.conf'), '/etc/nsswitch.conf')
-    if browser:
-        run('mount', '--bind', str(RUN / 'browser-hosts'), '/etc/hosts')
+    _private_etc(resolver, browser)
     # Filesystem Unix sockets are not isolated by a network namespace.
     # Do not let the private transport/browser configure host services over D-Bus.
     for target in ('/run/dbus/system_bus_socket', '/run/systemd/resolve/io.systemd.Resolve'):
